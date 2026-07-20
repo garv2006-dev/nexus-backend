@@ -29,6 +29,7 @@ def _jwk_client() -> PyJWKClient:
 async def get_current_claims(authorization: str | None = Header(None)) -> dict:
     """Extracts and verifies the Clerk session JWT from the Authorization header."""
     if not authorization or not authorization.lower().startswith("bearer "):
+        print("DEBUG AUTH: Missing or invalid Authorization header")
         raise HTTPException(status_code=401, detail="Missing bearer token")
 
     token = authorization.split(" ", 1)[1].strip()
@@ -41,8 +42,10 @@ async def get_current_claims(authorization: str | None = Header(None)) -> dict:
             algorithms=["RS256"],
             issuer=settings.clerk_issuer or None,
             options={"verify_aud": False},
+            leeway=86400,
         )
     except jwt.PyJWTError as exc:
+        print(f"DEBUG AUTH: Invalid session token: {exc}")
         raise HTTPException(status_code=401, detail=f"Invalid session token: {exc}")
 
     return claims

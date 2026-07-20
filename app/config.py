@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-1.5-flash"
 
+    openrouter_api_key: str = ""
+    openrouter_model: str = "google/gemini-2.5-flash"
+
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "nexus_chat"
 
@@ -25,7 +28,7 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:5173"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
     def cors_origin_list(self) -> list[str]:

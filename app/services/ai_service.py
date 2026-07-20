@@ -93,6 +93,31 @@ async def _stream_gemini(messages: list[Message]) -> AsyncGenerator[str, None]:
 
 
 # ---------------------------------------------------------------------------
+# OpenRouter
+# ---------------------------------------------------------------------------
+
+async def _stream_openrouter(messages: list[Message]) -> AsyncGenerator[str, None]:
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=settings.openrouter_api_key,
+    )
+
+    stream = await client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=messages,
+        max_tokens=1000,
+        stream=True,
+    )
+
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else None
+        if delta:
+            yield delta
+
+
+# ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
 
@@ -101,6 +126,9 @@ async def generate_reply_stream(
 ) -> AsyncGenerator[str, None]:
     if provider == "gemini":
         async for chunk in _stream_gemini(messages):
+            yield chunk
+    elif provider == "openrouter":
+        async for chunk in _stream_openrouter(messages):
             yield chunk
     else:
         async for chunk in _stream_openai(messages):
