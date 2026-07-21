@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     openrouter_model: str = "google/gemini-2.5-flash"
+    openrouter_max_tokens: int = 1000
 
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "nexus_chat"

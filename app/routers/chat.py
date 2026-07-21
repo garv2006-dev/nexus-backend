@@ -130,6 +130,8 @@ async def send_message(
                 "\n\n"
             )
         except Exception as exc:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

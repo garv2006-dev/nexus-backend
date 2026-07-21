@@ -107,7 +107,7 @@ async def _stream_openrouter(messages: list[Message]) -> AsyncGenerator[str, Non
     stream = await client.chat.completions.create(
         model=settings.openrouter_model,
         messages=messages,
-        max_tokens=1000,
+        max_tokens=settings.openrouter_max_tokens,
         stream=True,
     )
 
