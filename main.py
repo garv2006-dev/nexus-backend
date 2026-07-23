@@ -37,3 +37,5 @@ app.include_router(users.router)
 @app.get("/api/health")
 def health():
     return {"status": "ok", "provider": settings.ai_provider}
+
+# trigger reload

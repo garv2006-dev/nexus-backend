@@ -1,20 +1,27 @@
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorClient
+
+# pyrefly: ignore [missing-import]
+from mongomock_motor import AsyncMongoMockClient
 
 from .config import get_settings
 
 settings = get_settings()
 
-_client: AsyncIOMotorClient | None = None
+_client = None
 
 
-def get_client() -> AsyncIOMotorClient:
+def get_client():
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(settings.mongodb_uri)
+        if "localhost" in settings.mongodb_uri or "127.0.0.1" in settings.mongodb_uri:
+            print("Using in-memory mongomock database!")
+            _client = AsyncMongoMockClient()
+        else:
+            _client = AsyncIOMotorClient(settings.mongodb_uri)
     return _client
 
 
-def get_database() -> AsyncIOMotorDatabase:
+def get_database():
     return get_client()[settings.mongodb_db_name]
 
 

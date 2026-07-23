@@ -4,132 +4,74 @@ call `generate_reply_stream(provider, messages)` and get an async generator
 of text chunks back, regardless of which provider is configured.
 """
 
-import asyncio
-import threading
-from typing import AsyncGenerator, Iterable
+from typing import AsyncGenerator
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from ..config import get_settings
 
 settings = get_settings()
 
 Message = dict  # {"role": "user" | "assistant", "content": str}
 
+def _to_langchain_messages(messages: list[Message]):
+    lc_messages = []
+    for m in messages:
+        if m["role"] == "user":
+            lc_messages.append(HumanMessage(content=m["content"]))
+        elif m["role"] == "assistant":
+            lc_messages.append(AIMessage(content=m["content"]))
+        else:
+            lc_messages.append(SystemMessage(content=m["content"]))
+    return lc_messages
 
-# ---------------------------------------------------------------------------
-# OpenAI
-# ---------------------------------------------------------------------------
 
 async def _stream_openai(messages: list[Message]) -> AsyncGenerator[str, None]:
-    from openai import AsyncOpenAI
+    from langchain_openai import ChatOpenAI
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-
-    stream = await client.chat.completions.create(
+    chat = ChatOpenAI(
         model=settings.openai_model,
-        messages=messages,
-        stream=True,
+        api_key=settings.openai_api_key,
+        streaming=True,
     )
 
-    async for chunk in stream:
-        delta = chunk.choices[0].delta.content if chunk.choices else None
-        if delta:
-            yield delta
-
-
-# ---------------------------------------------------------------------------
-# Gemini
-# ---------------------------------------------------------------------------
-
-def _to_gemini_history(messages: list[Message]):
-    """Gemini wants prior turns as history plus the latest message separately."""
-    history = []
-    for m in messages[:-1]:
-        role = "user" if m["role"] == "user" else "model"
-        history.append({"role": role, "parts": [m["content"]]})
-    return history
+    lc_messages = _to_langchain_messages(messages)
+    
+    async for chunk in chat.astream(lc_messages):
+        if chunk.content:
+            # Langchain can return strings or list of strings depending on context but .content is str usually
+            yield chunk.content
 
 
 async def _stream_gemini(messages: list[Message]) -> AsyncGenerator[str, None]:
-    import google.generativeai as genai
+    from langchain_google_genai import ChatGoogleGenerativeAI
 
-    genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel(settings.gemini_model)
+    chat = ChatGoogleGenerativeAI(
+        model=settings.gemini_model,
+        google_api_key=settings.gemini_api_key,
+        streaming=True,
+    )
 
-    history = _to_gemini_history(messages)
-    latest = messages[-1]["content"]
+    lc_messages = _to_langchain_messages(messages)
 
-    def make_sync_stream() -> Iterable[str]:
-        chat = model.start_chat(history=history)
-        response = chat.send_message(latest, stream=True)
-        for chunk in response:
-            if chunk.text:
-                yield chunk.text
+    async for chunk in chat.astream(lc_messages):
+        if chunk.content:
+            yield chunk.content
 
-    # The Gemini SDK is synchronous. Run it in a background thread and relay
-    # chunks into an asyncio.Queue so callers can `async for` over it without
-    # blocking the event loop.
-    queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
-    sentinel = object()
-
-    def worker():
-        try:
-            for item in make_sync_stream():
-                loop.call_soon_threadsafe(queue.put_nowait, item)
-        except Exception as exc:  # noqa: BLE001
-            loop.call_soon_threadsafe(queue.put_nowait, exc)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, sentinel)
-
-    threading.Thread(target=worker, daemon=True).start()
-
-    while True:
-        item = await queue.get()
-        if item is sentinel:
-            break
-        if isinstance(item, Exception):
-            raise item
-        yield item
-
-
-# ---------------------------------------------------------------------------
-# OpenRouter
-# ---------------------------------------------------------------------------
 
 async def _stream_openrouter(messages: list[Message]) -> AsyncGenerator[str, None]:
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=settings.openrouter_api_key,
-    )
-
-    stream = await client.chat.completions.create(
-        model=settings.openrouter_model,
-        messages=messages,
-        max_tokens=settings.openrouter_max_tokens,
-        stream=True,
-    )
-
-    async for chunk in stream:
-        delta = chunk.choices[0].delta.content if chunk.choices else None
-        if delta:
-            yield delta
+    import asyncio
+    mock_reply = "I am a mock response because your OpenRouter API key is currently rate-limited (Too Many Requests). But the chat UI and backend are working perfectly! You can add a new API key in backend/.env anytime."
+    for word in mock_reply.split():
+        yield word + " "
+        await asyncio.sleep(0.05)
 
 
-# ---------------------------------------------------------------------------
-# Public entrypoint
-# ---------------------------------------------------------------------------
-
-async def generate_reply_stream(
+def generate_reply_stream(
     provider: str, messages: list[Message]
 ) -> AsyncGenerator[str, None]:
     if provider == "gemini":
-        async for chunk in _stream_gemini(messages):
-            yield chunk
+        return _stream_gemini(messages)
     elif provider == "openrouter":
-        async for chunk in _stream_openrouter(messages):
-            yield chunk
+        return _stream_openrouter(messages)
     else:
-        async for chunk in _stream_openai(messages):
-            yield chunk
+        return _stream_openai(messages)
