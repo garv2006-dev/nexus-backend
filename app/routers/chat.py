@@ -107,6 +107,12 @@ async def send_message(
     history_cursor = messages_collection().find({"session_id": session_id}).sort("created_at", 1)
     history = [{"role": doc["role"], "content": doc["content"]} async for doc in history_cursor]
 
+    # Prepend a system message to set the AI's identity
+    history.insert(0, {
+        "role": "system",
+        "content": "Your name is Nexus. You are a helpful AI assistant. If asked about your identity or name, say your name is Nexus. Never say you are a large language model trained by Google, OpenAI, or anyone else."
+    })
+
     async def event_stream():
         full_reply = ""
         try:
