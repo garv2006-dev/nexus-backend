@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     credit_limit: int = 100
     credit_reset_hours: int = 1
 
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "*"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
