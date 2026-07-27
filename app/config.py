@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     clerk_issuer: str = ""
 
     credit_limit: int = 100
-    credit_reset_hours: int = 1
+    credit_reset_hours: int = 24
 
     cors_origins: str = "*"
 
