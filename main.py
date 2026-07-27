@@ -22,23 +22,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Nexus AI Chat API", version="2.0.0", lifespan=lifespan)
 
-cors_origins = settings.cors_origin_list
-if "*" in cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=".*",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Always allow any requesting frontend origin (Vercel, local dev, custom domains) with credentials support
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=".*",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(chat.router)
 app.include_router(users.router)
