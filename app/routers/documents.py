@@ -28,6 +28,13 @@ async def upload_documents(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
 
+    # Pre-flight verify owner/admin permission & workspace max_documents limit
+    await document_service.verify_document_upload_permission_and_limit(
+        workspace_id=workspace_id,
+        user_id=user["id"],
+        incoming_count=len(files)
+    )
+
     max_bytes = settings.max_file_size_mb * 1024 * 1024
     results = []
 

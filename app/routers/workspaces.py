@@ -14,8 +14,10 @@ class WorkspaceCreatePayload(BaseModel):
 
 class WorkspaceUpdatePayload(BaseModel):
     name: Optional[str] = None
-    max_members: Optional[int] = Field(None, ge=1, le=50)
+    plan_type: Optional[str] = None
+    max_members: Optional[int] = Field(None, ge=1, le=100)
     daily_token_limit: Optional[int] = Field(None, ge=1000, le=10000000)
+    max_pages: Optional[int] = Field(None, ge=1, le=100000)
 
 
 @router.get("", response_model=List[dict])
@@ -43,8 +45,10 @@ async def update_workspace(
         workspace_id=workspace_id,
         user_id=user["id"],
         name=payload.name,
+        plan_type=payload.plan_type,
         max_members=payload.max_members,
-        daily_token_limit=payload.daily_token_limit
+        daily_token_limit=payload.daily_token_limit,
+        max_pages=payload.max_pages
     )
 
 
