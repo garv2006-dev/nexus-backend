@@ -154,7 +154,39 @@ Accept your invitation here:
         except Exception as e:
             logger.error(f"SMTP sending failed: {str(e)}")
 
-    # 2. Try Resend API if configured
+    # 2. Try Brevo REST API if configured
+    if settings.brevo_api_key:
+        try:
+            from email.utils import parseaddr
+            parsed_name, parsed_email = parseaddr(settings.smtp_from or settings.smtp_user)
+            sender_email = parsed_email if parsed_email else (settings.smtp_user or "noreply@nexusai.com")
+            sender_name = parsed_name if parsed_name else "Nexus AI"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    "https://api.brevo.com/v3/smtp/email",
+                    headers={
+                        "api-key": settings.brevo_api_key,
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    json={
+                        "sender": {"name": sender_name, "email": sender_email},
+                        "to": [{"email": to_email}],
+                        "subject": subject,
+                        "htmlContent": html_content,
+                        "textContent": plain_text
+                    }
+                )
+                if response.status_code in (200, 201, 202):
+                    logger.info(f"Invitation email sent to {to_email} via Brevo API. Response: {response.json()}")
+                    return True
+                else:
+                    logger.error(f"Brevo API error ({response.status_code}): {response.text}")
+        except Exception as e:
+            logger.error(f"Failed to send email via Brevo API: {str(e)}")
+
+    # 3. Try Resend API if configured
     if settings.resend_api_key:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
