@@ -20,7 +20,7 @@ async def perform_hybrid_search(
         return []
 
     ws_uuid = uuid.UUID(str(workspace_id))
-    query_embedding = generate_embedding(query_text)
+    query_embedding = generate_embedding(query_text, task_type="retrieval_query")
     vec_str = "[" + ",".join(str(f) for f in query_embedding) + "]"
 
     query = """

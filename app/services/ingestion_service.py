@@ -5,6 +5,53 @@ from pypdf import PdfReader
 import docx
 
 
+def clean_text_formatting(text: str) -> str:
+    """
+    Normalizes extracted PDF/document text formatting.
+    Collapses single-word vertical linebreaks and fragmented text blocks into clean, continuous sentences and paragraphs.
+    Preserves lists and bullet points.
+    """
+    if not text or not text.strip():
+        return ""
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    raw_lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+    blocks = []
+    current_block = []
+
+    for line in raw_lines:
+        is_bullet = bool(re.match(r'^(?:[●•\-\*]|\d+[\.\)])\s*', line)) or line in ["●", "•", "-", "*"]
+        if is_bullet:
+            if current_block:
+                blocks.append(" ".join(current_block))
+                current_block = []
+            current_block.append(line)
+        else:
+            current_block.append(line)
+
+    if current_block:
+        blocks.append(" ".join(current_block))
+
+    final_lines = []
+    i = 0
+    while i < len(blocks):
+        b = blocks[i].strip()
+        if b in ["●", "•", "-", "*"] and i + 1 < len(blocks):
+            final_lines.append(f"• {blocks[i+1].strip()}")
+            i += 2
+        else:
+            if b.startswith("●") or b.startswith("•"):
+                b = "• " + b.lstrip("●•").strip()
+            final_lines.append(b)
+            i += 1
+
+    res = "\n\n".join(final_lines)
+    res = re.sub(r'[ \t]+', ' ', res)
+    res = re.sub(r'\s+([,\.\?\!:])', r'\1', res)
+    return res.strip()
+
+
 def extract_text_from_file(file_bytes: bytes, file_name: str) -> List[Dict[str, Any]]:
     """
     Extracts text from PDF, DOC, DOCX, or TXT files.
@@ -16,9 +63,10 @@ def extract_text_from_file(file_bytes: bytes, file_name: str) -> List[Dict[str, 
     if ext == "pdf":
         reader = PdfReader(io.BytesIO(file_bytes))
         for idx, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append({"page_number": idx + 1, "text": text.strip()})
+            raw_text = page.extract_text() or ""
+            cleaned_text = clean_text_formatting(raw_text)
+            if cleaned_text:
+                pages.append({"page_number": idx + 1, "text": cleaned_text})
     elif ext in ["doc", "docx"]:
         try:
             doc = docx.Document(io.BytesIO(file_bytes))
@@ -27,23 +75,24 @@ def extract_text_from_file(file_bytes: bytes, file_name: str) -> List[Dict[str, 
                 if p.text.strip():
                     full_text.append(p.text.strip())
             
-            # Divide docx text into virtual pages (~2000 chars per page)
             raw_content = "\n\n".join(full_text)
+            cleaned_content = clean_text_formatting(raw_content)
             page_size = 2000
-            total_pages = max(1, (len(raw_content) + page_size - 1) // page_size)
+            total_pages = max(1, (len(cleaned_content) + page_size - 1) // page_size)
             for page_num in range(1, total_pages + 1):
                 start = (page_num - 1) * page_size
                 end = page_num * page_size
-                page_str = raw_content[start:end]
+                page_str = cleaned_content[start:end]
                 if page_str.strip():
                     pages.append({"page_number": page_num, "text": page_str.strip()})
-        except Exception as exc:
-            # Fallback text decoding if doc format is legacy binary or plain text
+        except Exception:
             text_str = file_bytes.decode("utf-8", errors="ignore")
-            pages.append({"page_number": 1, "text": text_str})
+            cleaned_text = clean_text_formatting(text_str)
+            pages.append({"page_number": 1, "text": cleaned_text})
     else:
         text_str = file_bytes.decode("utf-8", errors="ignore")
-        pages.append({"page_number": 1, "text": text_str})
+        cleaned_text = clean_text_formatting(text_str)
+        pages.append({"page_number": 1, "text": cleaned_text})
 
     if not pages:
         pages.append({"page_number": 1, "text": ""})

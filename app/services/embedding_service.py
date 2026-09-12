@@ -40,28 +40,71 @@ def _fallback_semantic_vector(text: str, dim: int = 768) -> List[float]:
     return vec.tolist()
 
 
-def generate_embedding(text: str) -> List[float]:
+def generate_embedding(text: str, task_type: str = "retrieval_document") -> List[float]:
     """Generates a 768-dimensional vector embedding for a single text string."""
     if not text or not text.strip():
         return _fallback_semantic_vector("empty", settings.embedding_dimension)
 
-    if settings.gemini_api_key and not settings.gemini_api_key.startswith("AQ.Ab8RN6Jr"):
+    api_key = settings.gemini_api_key
+    if api_key:
+        model_candidates = [
+            settings.embedding_model.replace("models/", ""),
+            "gemini-embedding-001",
+            "gemini-embedding-2",
+            "text-embedding-004",
+            "embedding-001"
+        ]
+        
+        # Try google.genai SDK (modern)
         try:
-            import google.generativeai as genai
-            res = genai.embed_content(
-                model=settings.embedding_model,
-                content=text,
-                task_type="retrieval_document"
-            )
-            emb = res.get("embedding")
-            if emb and len(emb) == settings.embedding_dimension:
-                return emb
-        except Exception as exc:
-            print(f"Gemini embedding API call failed: {exc}. Using fallback semantic vector.")
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            for model_name in model_candidates:
+                clean_model = model_name.replace("models/", "")
+                try:
+                    res = client.models.embed_content(
+                        model=clean_model,
+                        contents=text,
+                        config={
+                            "task_type": task_type.upper(),
+                            "output_dimensionality": settings.embedding_dimension
+                        }
+                    )
+                    if hasattr(res, "embeddings") and res.embeddings:
+                        emb = res.embeddings[0].values
+                        if len(emb) == settings.embedding_dimension:
+                            return list(emb)
+                except Exception as ex:
+                    continue
+        except Exception:
+            pass
+
+        # Fallback to legacy google.generativeai SDK
+        try:
+            import google.generativeai as genai_legacy
+            genai_legacy.configure(api_key=api_key)
+            for model_name in model_candidates:
+                try:
+                    res = genai_legacy.embed_content(
+                        model=model_name if model_name.startswith("models/") else f"models/{model_name}",
+                        content=text,
+                        task_type=task_type.lower()
+                    )
+                    emb = res.get("embedding")
+                    if emb:
+                        if len(emb) > settings.embedding_dimension:
+                            emb = emb[:settings.embedding_dimension]
+                        if len(emb) == settings.embedding_dimension:
+                            return emb
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     return _fallback_semantic_vector(text, settings.embedding_dimension)
 
 
-def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
+def generate_embeddings_batch(texts: List[str], task_type: str = "retrieval_document") -> List[List[float]]:
     """Generates embeddings for a batch of text strings."""
-    return [generate_embedding(t) for t in texts]
+    return [generate_embedding(t, task_type=task_type) for t in texts]
+
