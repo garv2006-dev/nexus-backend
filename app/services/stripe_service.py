@@ -1,0 +1,558 @@
+"""
+Stripe Service for Payment Processing, Checkout Sessions, Webhooks, and Subscription Management.
+"""
+
+import time
+import datetime
+from typing import Dict, Any, Optional
+import stripe
+from fastapi import HTTPException
+
+from app.config import get_settings
+from app.database import fetch_one, execute, fetch_all
+
+settings = get_settings()
+
+# Server-side pricing dictionary (source of truth for plans, pricing, and resource limits)
+PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
+    "starter": {
+        "name": "Starter / Free Plan",
+        "amount": 0,
+        "currency": "usd",
+        "daily_token_limit": 50000,
+        "max_pages": 50,
+        "max_members": 5,
+        "interval": "month"
+    },
+    "pro": {
+        "name": "Pro Plan",
+        "amount": 2900,  # $29.00 USD in cents
+        "currency": "usd",
+        "daily_token_limit": 250000,
+        "max_pages": 250,
+        "max_members": 15,
+        "interval": "month",
+        "price_id_setting": "stripe_pro_price_id"
+    },
+    "enterprise": {
+        "name": "Enterprise Plan",
+        "amount": 9900,  # $99.00 USD in cents
+        "currency": "usd",
+        "daily_token_limit": 1000000,
+        "max_pages": 500,
+        "max_members": 50,
+        "interval": "month",
+        "price_id_setting": "stripe_enterprise_price_id"
+    }
+}
+
+
+def init_stripe():
+    """Initializes Stripe secret key."""
+    if settings.stripe_secret_key:
+        stripe.api_key = settings.stripe_secret_key
+
+
+async def get_or_create_stripe_customer(user_id: str, email: Optional[str] = None, name: Optional[str] = None) -> str:
+    """Retrieves existing Stripe Customer ID or creates a new Stripe Customer."""
+    init_stripe()
+    
+    # Check database for user's stripe_customer_id
+    user = await fetch_one("SELECT stripe_customer_id FROM users WHERE id = $1", user_id)
+    if user and user.get("stripe_customer_id"):
+        return user["stripe_customer_id"]
+
+    if not settings.stripe_secret_key:
+        # Development fallback ID if Stripe Secret Key is not configured yet
+        mock_customer_id = f"cus_test_{user_id[:12]}"
+        await execute("UPDATE users SET stripe_customer_id = $1 WHERE id = $2", mock_customer_id, user_id)
+        return mock_customer_id
+
+    try:
+        customer = stripe.Customer.create(
+            email=email or None,
+            name=name or None,
+            metadata={
+                "user_id": user_id,
+                "app": "Multi-User RAG Workspace System"
+            }
+        )
+        customer_id = customer["id"]
+        await execute("UPDATE users SET stripe_customer_id = $1 WHERE id = $2", customer_id, user_id)
+        return customer_id
+    except stripe.StripeError as e:
+        print(f"Stripe Customer Creation Warning: {e}")
+        # Fallback customer ID for non-blocking local dev testing
+        fallback_id = f"cus_fallback_{user_id[:10]}"
+        await execute("UPDATE users SET stripe_customer_id = $1 WHERE id = $2", fallback_id, user_id)
+        return fallback_id
+
+
+async def create_checkout_session(
+    workspace_id: str,
+    user_id: str,
+    user_email: Optional[str],
+    plan_id: str
+) -> Dict[str, Any]:
+    """
+    Creates a Stripe Checkout Session for subscription purchase.
+    Validates pricing server-side to prevent client price tampering.
+    """
+    init_stripe()
+
+    if plan_id not in PLAN_CONFIG or plan_id == "starter":
+        raise HTTPException(status_code=400, detail="Invalid plan selected for paid upgrade.")
+
+    plan_info = PLAN_CONFIG[plan_id]
+
+    # Verify workspace ownership / admin permission
+    member = await fetch_one(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+        workspace_id, user_id
+    )
+    if not member or member.get("role") not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only workspace owner or admin can purchase plan upgrades.")
+
+    customer_id = await get_or_create_stripe_customer(user_id, user_email)
+
+    frontend_base = (settings.app_frontend_url or "http://localhost:5173").rstrip("/")
+    success_url = f"{frontend_base}/workspace/{workspace_id}/plan?success=true&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{frontend_base}/workspace/{workspace_id}/plan?canceled=true"
+
+    if not settings.stripe_secret_key:
+        # Development mode simulation if secret key is missing
+        simulated_session_id = f"cs_test_{int(time.time())}"
+        await execute(
+            """
+            INSERT INTO payments (
+                user_id, workspace_id, stripe_customer_id, stripe_checkout_session_id,
+                plan_id, amount, currency, payment_status, subscription_status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 'incomplete')
+            ON CONFLICT (stripe_checkout_session_id) DO NOTHING
+            """,
+            user_id, workspace_id, customer_id, simulated_session_id,
+            plan_id, plan_info["amount"], plan_info["currency"]
+        )
+        return {
+            "session_id": simulated_session_id,
+            "checkout_url": f"{frontend_base}/workspace/{workspace_id}/plan?success=true&session_id={simulated_session_id}&simulated=true",
+            "publishable_key": settings.stripe_publishable_key or "pk_test_placeholder",
+            "simulated": True
+        }
+
+    # Determine price ID or dynamic line item configuration
+    configured_price_id = getattr(settings, plan_info.get("price_id_setting", ""), None)
+
+    try:
+        if configured_price_id:
+            line_items = [{"price": configured_price_id, "quantity": 1}]
+        else:
+            line_items = [{
+                "price_data": {
+                    "currency": plan_info["currency"],
+                    "product_data": {
+                        "name": f"Nexus AI RAG Workspace - {plan_info['name']}",
+                        "description": f"Expands daily token limit to {plan_info['daily_token_limit']:,} tokens & {plan_info['max_pages']} page storage limit.",
+                    },
+                    "unit_amount": plan_info["amount"],
+                    "recurring": {
+                        "interval": plan_info["interval"]
+                    }
+                },
+                "quantity": 1
+            }]
+
+        session = stripe.checkout.Session.create(
+            customer=customer_id,
+            payment_method_types=["card"],
+            line_items=line_items,
+            mode="subscription",
+            success_url=success_url,
+            cancel_url=cancel_url,
+            client_reference_id=workspace_id,
+            metadata={
+                "workspace_id": workspace_id,
+                "user_id": user_id,
+                "plan_id": plan_id
+            },
+            subscription_data={
+                "metadata": {
+                    "workspace_id": workspace_id,
+                    "user_id": user_id,
+                    "plan_id": plan_id
+                }
+            }
+        )
+
+        # Log pending payment session to database
+        await execute(
+            """
+            INSERT INTO payments (
+                user_id, workspace_id, stripe_customer_id, stripe_checkout_session_id,
+                plan_id, amount, currency, payment_status, subscription_status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 'incomplete')
+            ON CONFLICT (stripe_checkout_session_id) DO UPDATE SET
+                payment_status = 'pending',
+                plan_id = EXCLUDED.plan_id,
+                amount = EXCLUDED.amount
+            """,
+            user_id, workspace_id, customer_id, session.id,
+            plan_id, plan_info["amount"], plan_info["currency"]
+        )
+
+        return {
+            "session_id": session.id,
+            "checkout_url": session.url,
+            "publishable_key": settings.stripe_publishable_key
+        }
+
+    except stripe.StripeError as e:
+        print(f"Stripe Checkout Error: {e}")
+        raise HTTPException(status_code=400, detail=f"Stripe Checkout Session error: {str(e)}")
+
+
+async def verify_and_fulfill_checkout_session(session_id: str, workspace_id: str) -> Dict[str, Any]:
+    """
+    Verifies a Stripe Checkout Session status directly with Stripe API upon user return,
+    and immediately upgrades workspace plan and resource quotas.
+    This guarantees plan activation even if webhooks are delayed or not connected locally.
+    """
+    init_stripe()
+
+    # 1. Check if workspace exists
+    workspace = await fetch_one("SELECT id, plan_type FROM workspaces WHERE id = $1", workspace_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+
+    plan_id = "pro"
+    customer_id = None
+    subscription_id = None
+    payment_intent_id = None
+    is_paid = False
+
+    if settings.stripe_secret_key and not session_id.startswith("cs_test_"):
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            metadata = session.get("metadata") or {}
+            plan_id = metadata.get("plan_id") or "pro"
+            customer_id = session.get("customer")
+            subscription_id = session.get("subscription")
+            payment_intent_id = session.get("payment_intent")
+
+            # Check if paid / complete
+            if session.get("payment_status") in ("paid", "no_payment_required") or session.get("status") == "complete":
+                is_paid = True
+        except stripe.StripeError as e:
+            print(f"Stripe Session Retrieve Warning: {e}")
+            raise HTTPException(status_code=400, detail=f"Could not verify Stripe session: {str(e)}")
+    else:
+        # Development / simulated session
+        is_paid = True
+
+    if not is_paid:
+        return {
+            "status": "pending",
+            "message": "Payment is not completed yet.",
+            "workspace_id": workspace_id
+        }
+
+    if plan_id not in PLAN_CONFIG:
+        plan_id = "pro"
+
+    plan_meta = PLAN_CONFIG[plan_id]
+    now = datetime.datetime.now(datetime.timezone.utc)
+    period_end = now + datetime.timedelta(days=30)
+
+    # 2. Update Workspaces table with paid tier capacity immediately
+    await execute(
+        """
+        UPDATE workspaces
+        SET plan_type = $1,
+            daily_token_limit = $2,
+            max_pages = $3,
+            max_members = $4,
+            stripe_customer_id = COALESCE($5, stripe_customer_id),
+            stripe_subscription_id = COALESCE($6, stripe_subscription_id),
+            subscription_status = 'active',
+            current_period_end = $7,
+            updated_at = $8
+        WHERE id = $9
+        """,
+        plan_id, plan_meta["daily_token_limit"], plan_meta["max_pages"],
+        plan_meta["max_members"], customer_id, subscription_id, period_end, now, workspace_id
+    )
+
+    # 3. Insert or update payments record
+    await execute(
+        """
+        INSERT INTO payments (
+            user_id, workspace_id, stripe_customer_id, stripe_checkout_session_id,
+            stripe_payment_intent_id, stripe_subscription_id, plan_id, amount,
+            currency, payment_status, subscription_status, completed_at
+        ) VALUES ('user', $1, $2, $3, $4, $5, $6, $7, $8, 'succeeded', 'active', $9)
+        ON CONFLICT (stripe_checkout_session_id) DO UPDATE SET
+            stripe_payment_intent_id = EXCLUDED.stripe_payment_intent_id,
+            stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+            payment_status = 'succeeded',
+            subscription_status = 'active',
+            completed_at = EXCLUDED.completed_at
+        """,
+        workspace_id, customer_id, session_id,
+        payment_intent_id, subscription_id, plan_id, plan_meta["amount"],
+        plan_meta["currency"], now
+    )
+
+    # Return updated payment status
+    return await get_payment_status(workspace_id)
+
+
+
+async def cancel_subscription(workspace_id: str, user_id: str) -> Dict[str, Any]:
+    """Cancels active subscription for a workspace at current period end."""
+    init_stripe()
+
+    # Check permission
+    member = await fetch_one(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+        workspace_id, user_id
+    )
+    if not member or member.get("role") not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only workspace owner or admin can manage subscriptions.")
+
+    workspace = await fetch_one("SELECT stripe_subscription_id, plan_type FROM workspaces WHERE id = $1", workspace_id)
+    if not workspace or not workspace.get("stripe_subscription_id"):
+        raise HTTPException(status_code=400, detail="No active Stripe subscription found for this workspace.")
+
+    sub_id = workspace["stripe_subscription_id"]
+
+    if settings.stripe_secret_key and not sub_id.startswith("sub_simulated_"):
+        try:
+            subscription = stripe.Subscription.modify(
+                sub_id,
+                cancel_at_period_end=True
+            )
+            cancel_at = subscription.get("cancel_at")
+            cancel_date = datetime.datetime.fromtimestamp(cancel_at, tz=datetime.timezone.utc) if cancel_at else datetime.datetime.now(datetime.timezone.utc)
+        except stripe.StripeError as e:
+            raise HTTPException(status_code=400, detail=f"Stripe Cancellation Error: {str(e)}")
+    else:
+        cancel_date = datetime.datetime.now(datetime.timezone.utc)
+
+    await execute(
+        """
+        UPDATE workspaces
+        SET subscription_status = 'canceling'
+        WHERE id = $1
+        """,
+        workspace_id
+    )
+
+    await execute(
+        """
+        UPDATE payments
+        SET subscription_status = 'canceling', canceled_at = $1
+        WHERE workspace_id = $2 AND stripe_subscription_id = $3
+        """,
+        cancel_date, workspace_id, sub_id
+    )
+
+    return {
+        "status": "success",
+        "message": "Subscription set to cancel at the end of the billing period.",
+        "workspace_id": workspace_id
+    }
+
+
+async def get_payment_status(workspace_id: str) -> Dict[str, Any]:
+    """Retrieves current workspace plan, subscription status, and latest payment history."""
+    workspace = await fetch_one(
+        """
+        SELECT id, name, plan_type, max_members, daily_token_limit, max_pages,
+               stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end
+        FROM workspaces
+        WHERE id = $1
+        """,
+        workspace_id
+    )
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+
+    recent_payments = await fetch_all(
+        """
+        SELECT id, plan_id, amount, currency, payment_status, subscription_status,
+               stripe_checkout_session_id, stripe_payment_intent_id, created_at, completed_at
+        FROM payments
+        WHERE workspace_id = $1
+        ORDER BY created_at DESC
+        LIMIT 10
+        """,
+        workspace_id
+    )
+
+    plan_key = workspace.get("plan_type", "starter")
+    plan_meta = PLAN_CONFIG.get(plan_key, PLAN_CONFIG["starter"])
+
+    return {
+        "workspace_id": workspace["id"],
+        "plan_type": plan_key,
+        "plan_name": plan_meta["name"],
+        "daily_token_limit": workspace.get("daily_token_limit", 50000),
+        "max_pages": workspace.get("max_pages", 50),
+        "max_members": workspace.get("max_members", 5),
+        "subscription_status": workspace.get("subscription_status") or "active",
+        "stripe_customer_id": workspace.get("stripe_customer_id"),
+        "stripe_subscription_id": workspace.get("stripe_subscription_id"),
+        "current_period_end": workspace.get("current_period_end"),
+        "payment_history": recent_payments
+    }
+
+
+def verify_webhook_signature(payload: bytes, sig_header: str) -> stripe.Event:
+    """Verifies Stripe Webhook signature against STRIPE_WEBHOOK_SECRET."""
+    init_stripe()
+    if not settings.stripe_webhook_secret:
+        raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET is not configured on server.")
+    
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, settings.stripe_webhook_secret
+        )
+        return event
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid webhook payload: {str(e)}")
+    except stripe.SignatureVerificationError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid webhook signature: {str(e)}")
+
+
+async def process_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Processes incoming Stripe Webhook events idempotently.
+    Updates workspace subscription tier, token & page quotas, and payment log.
+    """
+    event_type = event.get("type")
+    data_object = event.get("data", {}).get("object", {})
+
+    print(f"Processing Stripe Webhook Event: {event_type}")
+
+    if event_type == "checkout.session.completed":
+        session_id = data_object.get("id")
+        workspace_id = data_object.get("client_reference_id") or data_object.get("metadata", {}).get("workspace_id")
+        user_id = data_object.get("metadata", {}).get("user_id")
+        plan_id = data_object.get("metadata", {}).get("plan_id", "pro")
+        customer_id = data_object.get("customer")
+        subscription_id = data_object.get("subscription")
+        payment_intent_id = data_object.get("payment_intent")
+
+        if workspace_id and plan_id in PLAN_CONFIG:
+            plan_meta = PLAN_CONFIG[plan_id]
+            now = datetime.datetime.now(datetime.timezone.utc)
+            period_end = now + datetime.timedelta(days=30)
+
+            # 1. Update Workspaces table with paid tier capacity
+            await execute(
+                """
+                UPDATE workspaces
+                SET plan_type = $1,
+                    daily_token_limit = $2,
+                    max_pages = $3,
+                    max_members = $4,
+                    stripe_customer_id = COALESCE($5, stripe_customer_id),
+                    stripe_subscription_id = COALESCE($6, stripe_subscription_id),
+                    subscription_status = 'active',
+                    current_period_end = $7,
+                    updated_at = $8
+                WHERE id = $9
+                """,
+                plan_id, plan_meta["daily_token_limit"], plan_meta["max_pages"],
+                plan_meta["max_members"], customer_id, subscription_id, period_end, now, workspace_id
+            )
+
+            # 2. Update Payments table record idempotently
+            await execute(
+                """
+                INSERT INTO payments (
+                    user_id, workspace_id, stripe_customer_id, stripe_checkout_session_id,
+                    stripe_payment_intent_id, stripe_subscription_id, plan_id, amount,
+                    currency, payment_status, subscription_status, completed_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'succeeded', 'active', $10)
+                ON CONFLICT (stripe_checkout_session_id) DO UPDATE SET
+                    stripe_payment_intent_id = EXCLUDED.stripe_payment_intent_id,
+                    stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+                    payment_status = 'succeeded',
+                    subscription_status = 'active',
+                    completed_at = EXCLUDED.completed_at
+                """,
+                user_id or "system", workspace_id, customer_id, session_id,
+                payment_intent_id, subscription_id, plan_id, plan_meta["amount"],
+                plan_meta["currency"], now
+            )
+
+    elif event_type in ("payment_intent.succeeded", "invoice.paid"):
+        payment_intent_id = data_object.get("payment_intent") or data_object.get("id")
+        customer_id = data_object.get("customer")
+        if payment_intent_id:
+            await execute(
+                """
+                UPDATE payments
+                SET payment_status = 'succeeded', completed_at = now()
+                WHERE stripe_payment_intent_id = $1 OR stripe_customer_id = $2
+                """,
+                payment_intent_id, customer_id
+            )
+
+    elif event_type in ("payment_intent.payment_failed", "invoice.payment_failed"):
+        payment_intent_id = data_object.get("payment_intent") or data_object.get("id")
+        customer_id = data_object.get("customer")
+        if payment_intent_id or customer_id:
+            await execute(
+                """
+                UPDATE payments
+                SET payment_status = 'failed'
+                WHERE stripe_payment_intent_id = $1 OR stripe_customer_id = $2
+                """,
+                payment_intent_id, customer_id
+            )
+
+    elif event_type == "customer.subscription.deleted":
+        subscription_id = data_object.get("id")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if subscription_id:
+            # Downgrade workspace back to starter defaults
+            await execute(
+                """
+                UPDATE workspaces
+                SET plan_type = 'starter',
+                    daily_token_limit = 50000,
+                    max_pages = 50,
+                    max_members = 5,
+                    subscription_status = 'canceled',
+                    updated_at = $1
+                WHERE stripe_subscription_id = $2
+                """,
+                now, subscription_id
+            )
+            await execute(
+                """
+                UPDATE payments
+                SET subscription_status = 'canceled', canceled_at = $1
+                WHERE stripe_subscription_id = $2
+                """,
+                now, subscription_id
+            )
+
+    elif event_type == "customer.subscription.updated":
+        subscription_id = data_object.get("id")
+        status = data_object.get("status")
+        cancel_at_period_end = data_object.get("cancel_at_period_end", False)
+        sub_status = "canceling" if cancel_at_period_end else status
+        if subscription_id:
+            await execute(
+                """
+                UPDATE workspaces
+                SET subscription_status = $1
+                WHERE stripe_subscription_id = $2
+                """,
+                sub_status, subscription_id
+            )
+
+    return {"status": "event_processed", "event_type": event_type}

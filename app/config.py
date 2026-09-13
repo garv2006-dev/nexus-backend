@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     mailjet_api_key: str = ""
     mailjet_secret_key: str = ""
 
+    # Stripe Payment Gateway Settings
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_pro_price_id: str = ""
+    stripe_enterprise_price_id: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
