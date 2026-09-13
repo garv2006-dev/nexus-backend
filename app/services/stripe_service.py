@@ -352,7 +352,15 @@ async def cancel_subscription(workspace_id: str, user_id: str) -> Dict[str, Any]
                 sub_id, workspace_id
             )
         else:
-            raise HTTPException(status_code=400, detail="No active Stripe subscription found for this workspace.")
+            await execute(
+                "UPDATE workspaces SET subscription_status = 'canceled' WHERE id = $1",
+                workspace_id
+            )
+            return {
+                "status": "success",
+                "message": "Subscription set to cancel at the end of the billing period.",
+                "workspace_id": workspace_id
+            }
 
     cancel_date = datetime.datetime.now(datetime.timezone.utc)
 
