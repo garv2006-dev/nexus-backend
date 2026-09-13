@@ -2,6 +2,7 @@
 Stripe Service for Payment Processing, Checkout Sessions, Webhooks, and Subscription Management.
 """
 
+import uuid
 import time
 import datetime
 from typing import Dict, Any, Optional
@@ -10,6 +11,10 @@ from fastapi import HTTPException
 
 from app.config import get_settings
 from app.database import fetch_one, execute, fetch_all
+from app.services.email_service import (
+    send_subscription_canceled_email,
+    send_subscription_expired_downgrade_email
+)
 
 settings = get_settings()
 
@@ -394,10 +399,145 @@ async def cancel_subscription(workspace_id: str, user_id: str) -> Dict[str, Any]
         cancel_date, workspace_id, sub_id
     )
 
+    # Send cancellation notification email to workspace owner
+    try:
+        user = await fetch_one("SELECT email FROM users WHERE id = $1", user_id)
+        ws_detail = await fetch_one("SELECT name FROM workspaces WHERE id = $1", workspace_id)
+        if user and user.get("email") and ws_detail:
+            effective_date_str = cancel_date.strftime("%B %d, %Y")
+            await send_subscription_canceled_email(
+                to_email=user["email"],
+                workspace_name=ws_detail["name"],
+                effective_date_str=effective_date_str
+            )
+    except Exception as e:
+        print(f"Failed to send cancellation email: {e}")
+
     return {
         "status": "success",
         "message": "Subscription set to cancel at the end of the billing period.",
         "workspace_id": workspace_id
+    }
+
+
+async def downgrade_workspace_to_default_plan(workspace_id: str) -> Dict[str, Any]:
+    """
+    Reverts a workspace to the Default Free Starter Plan when subscription period ends.
+    Prunes excess member seats (> 5) and excess document pages (> 50 pages).
+    Sends email notifications to workspace owner listing any removed items.
+    """
+    ws_id_str = str(workspace_id)
+
+    workspace = await fetch_one(
+        "SELECT id, name, owner_id FROM workspaces WHERE id = $1",
+        ws_id_str
+    )
+    if not workspace:
+        return {"status": "error", "message": "Workspace not found"}
+
+    workspace_name = workspace["name"]
+    owner_id = workspace.get("owner_id")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # 1. Revert workspace record to Starter tier limits
+    await execute(
+        """
+        UPDATE workspaces
+        SET plan_type = 'starter',
+            daily_token_limit = 50000,
+            max_pages = 50,
+            max_members = 5,
+            subscription_status = 'canceled',
+            updated_at = $1
+        WHERE id = $2
+        """,
+        now, ws_id_str
+    )
+
+    await execute(
+        """
+        UPDATE payments
+        SET subscription_status = 'canceled', canceled_at = $1
+        WHERE workspace_id = $2
+        """,
+        now, ws_id_str
+    )
+
+    # 2. Prune excess member seats (> 5)
+    members = await fetch_all(
+        """
+        SELECT wm.user_id, wm.role, u.email, u.name
+        FROM workspace_members wm
+        LEFT JOIN users u ON u.id = wm.user_id
+        WHERE wm.workspace_id = $1
+        ORDER BY (CASE WHEN wm.role = 'owner' THEN 0 ELSE 1 END) ASC, wm.joined_at ASC
+        """,
+        ws_id_str
+    )
+
+    removed_members = []
+    if len(members) > 5:
+        keep_members = members[:5]
+        excess_members = members[5:]
+        for m in excess_members:
+            m_user_id = m["user_id"]
+            m_identifier = m.get("name") or m.get("email") or str(m_user_id)
+            removed_members.append(m_identifier)
+            await execute(
+                "DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+                ws_id_str, m_user_id
+            )
+
+    # 3. Prune excess document pages (> 50 pages total)
+    docs = await fetch_all(
+        """
+        SELECT id, name, page_count, created_at
+        FROM documents
+        WHERE workspace_id = $1
+        ORDER BY created_at ASC
+        """,
+        ws_id_str
+    )
+
+    removed_documents = []
+    total_pages = sum([d.get("page_count") or 1 for d in docs])
+
+    if total_pages > 50:
+        pages_to_remove = total_pages - 50
+        pages_removed_so_far = 0
+        for doc in docs:
+            if pages_removed_so_far < pages_to_remove:
+                doc_id = doc["id"]
+                doc_name = doc["name"]
+                p_cnt = doc.get("page_count") or 1
+                removed_documents.append(doc_name)
+                pages_removed_so_far += p_cnt
+                await execute("DELETE FROM documents WHERE id = $1", doc_id)
+
+    # 4. Dispatch Email Notifications
+    owner_email = None
+    if owner_id:
+        owner_user = await fetch_one("SELECT email FROM users WHERE id = $1", owner_id)
+        if owner_user:
+            owner_email = owner_user.get("email")
+
+    if not owner_email and members:
+        owner_email = members[0].get("email")
+
+    if owner_email:
+        await send_subscription_expired_downgrade_email(
+            to_email=owner_email,
+            workspace_name=workspace_name,
+            removed_documents=removed_documents,
+            removed_members=removed_members
+        )
+
+    return {
+        "status": "success",
+        "message": f"Workspace '{workspace_name}' reverted to Starter Plan.",
+        "removed_documents": removed_documents,
+        "removed_members": removed_members
     }
 
 
@@ -414,6 +554,24 @@ async def get_payment_status(workspace_id: str) -> Dict[str, Any]:
     )
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found.")
+
+    # Check if subscription period has expired for a canceled/canceling workspace
+    current_status = workspace.get("subscription_status")
+    period_end = workspace.get("current_period_end")
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+    if current_status == "canceling" and period_end and period_end <= now_utc:
+        # Revert workspace to default starter plan & clean up excess capacity
+        await downgrade_workspace_to_default_plan(workspace_id)
+        workspace = await fetch_one(
+            """
+            SELECT id, name, plan_type, max_members, daily_token_limit, max_pages,
+                   stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end
+            FROM workspaces
+            WHERE id = $1
+            """,
+            workspace_id
+        )
 
     recent_payments = await fetch_all(
         """
@@ -553,30 +711,10 @@ async def process_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     elif event_type == "customer.subscription.deleted":
         subscription_id = data_object.get("id")
-        now = datetime.datetime.now(datetime.timezone.utc)
         if subscription_id:
-            # Downgrade workspace back to starter defaults
-            await execute(
-                """
-                UPDATE workspaces
-                SET plan_type = 'starter',
-                    daily_token_limit = 50000,
-                    max_pages = 50,
-                    max_members = 5,
-                    subscription_status = 'canceled',
-                    updated_at = $1
-                WHERE stripe_subscription_id = $2
-                """,
-                now, subscription_id
-            )
-            await execute(
-                """
-                UPDATE payments
-                SET subscription_status = 'canceled', canceled_at = $1
-                WHERE stripe_subscription_id = $2
-                """,
-                now, subscription_id
-            )
+            ws = await fetch_one("SELECT id FROM workspaces WHERE stripe_subscription_id = $1", subscription_id)
+            if ws:
+                await downgrade_workspace_to_default_plan(ws["id"])
 
     elif event_type == "customer.subscription.updated":
         subscription_id = data_object.get("id")
