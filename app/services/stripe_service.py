@@ -682,6 +682,8 @@ async def process_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
                 user_id or "system", workspace_id, customer_id, session_id,
                 payment_intent_id, subscription_id, plan_id, plan_meta["amount"],
                 plan_meta["currency"], now
+            )
+
             # 3. Dispatch Payment Invoice Email to Workspace Owner
             try:
                 ws_data = await fetch_one("SELECT name, owner_id FROM workspaces WHERE id = $1", workspace_id)
