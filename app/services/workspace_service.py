@@ -35,6 +35,17 @@ async def verify_workspace_owner(user_id: str, workspace_id: str) -> Dict[str, A
     return ws
 
 
+async def verify_workspace_admin_or_owner(user_id: str, workspace_id: str) -> Dict[str, Any]:
+    """Verifies that the user is an owner or admin of the specified workspace."""
+    member = await verify_workspace_member(user_id, workspace_id)
+    if member.get("role") not in ("owner", "admin") and str(member.get("owner_id")) != str(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Only workspace owners and admins can perform this operation."
+        )
+    return member
+
+
 PLAN_SPECS = {
     "starter": {"daily_token_limit": 50000, "max_pages": 50, "max_members": 5},
     "pro": {"daily_token_limit": 250000, "max_pages": 250, "max_members": 15},
@@ -156,8 +167,8 @@ async def update_workspace_settings(
     daily_token_limit: int = None,
     max_pages: int = None
 ) -> Dict[str, Any]:
-    """Updates workspace administrative settings and plan tier (owner only)."""
-    await verify_workspace_owner(user_id, workspace_id)
+    """Updates workspace administrative settings and plan tier (owner or admin)."""
+    await verify_workspace_admin_or_owner(user_id, workspace_id)
     ws_uuid = uuid.UUID(str(workspace_id))
 
     updates = []
