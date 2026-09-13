@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_pool, close_pool
-from app.routers import workspaces, invitations, documents, rag, usage, users
+from app.routers import workspaces, invitations, documents, rag, usage, users, payments
 
 settings = get_settings()
 
@@ -25,6 +25,36 @@ async def lifespan(app: FastAPI):
         await execute("ALTER TABLE workspaces ALTER COLUMN max_pages SET DEFAULT 50;")
         await execute("ALTER TABLE workspaces ALTER COLUMN daily_token_limit SET DEFAULT 50000;")
         await execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS page_count INT DEFAULT 1;")
+        
+        # Stripe Payment Schema Extensions
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
+        await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
+        await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")
+        await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS subscription_status TEXT DEFAULT 'active';")
+        await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ;")
+
+        await execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id TEXT NOT NULL,
+                workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                stripe_customer_id TEXT,
+                stripe_checkout_session_id TEXT UNIQUE,
+                stripe_payment_intent_id TEXT,
+                stripe_subscription_id TEXT,
+                plan_id TEXT NOT NULL,
+                amount INT NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'usd',
+                payment_status TEXT NOT NULL DEFAULT 'pending',
+                subscription_status TEXT NOT NULL DEFAULT 'incomplete',
+                created_at TIMESTAMPTZ DEFAULT now(),
+                completed_at TIMESTAMPTZ,
+                canceled_at TIMESTAMPTZ
+            );
+        """)
+        await execute("CREATE INDEX IF NOT EXISTS idx_payments_workspace ON payments(workspace_id);")
+        await execute("CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);")
+        await execute("CREATE INDEX IF NOT EXISTS idx_payments_session ON payments(stripe_checkout_session_id);")
     except Exception as err:
         print(f"Schema migration warning: {err}")
     yield
@@ -52,6 +82,8 @@ app.include_router(documents.router)
 app.include_router(rag.router)
 app.include_router(usage.router)
 app.include_router(users.router)
+app.include_router(payments.router)
+
 
 
 @app.get("/api/health")
