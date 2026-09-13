@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     brevo_api_key: str = ""
 
+    # Mailjet API & SMTP Settings
+    mailjet_api_key: str = ""
+    mailjet_secret_key: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

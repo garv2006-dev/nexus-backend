@@ -154,6 +154,46 @@ Accept your invitation here:
         except Exception as e:
             logger.error(f"SMTP sending failed: {str(e)}")
 
+    # 2. Try Mailjet REST API if configured
+    if settings.mailjet_api_key and settings.mailjet_secret_key:
+        try:
+            from email.utils import parseaddr
+            parsed_name, parsed_email = parseaddr(settings.smtp_from or settings.email_from)
+            sender_email = parsed_email if parsed_email else "noreply@nexusai.com"
+            sender_name = parsed_name if parsed_name else "Nexus AI"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    "https://api.mailjet.com/v3.1/send",
+                    auth=(settings.mailjet_api_key, settings.mailjet_secret_key),
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "Messages": [
+                            {
+                                "From": {
+                                    "Email": sender_email,
+                                    "Name": sender_name
+                                },
+                                "To": [
+                                    {
+                                        "Email": to_email
+                                    }
+                                ],
+                                "Subject": subject,
+                                "TextPart": plain_text,
+                                "HTMLPart": html_content
+                            }
+                        ]
+                    }
+                )
+                if response.status_code in (200, 201, 202):
+                    logger.info(f"Invitation email sent to {to_email} via Mailjet API. Response: {response.json()}")
+                    return True
+                else:
+                    logger.error(f"Mailjet API error ({response.status_code}): {response.text}")
+        except Exception as e:
+            logger.error(f"Failed to send email via Mailjet API: {str(e)}")
+
     # 2. Try Brevo REST API if configured
     if settings.brevo_api_key:
         try:
