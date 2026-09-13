@@ -25,9 +25,9 @@ PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
         "name": "Starter / Free Plan",
         "amount": 0,
         "currency": "usd",
-        "daily_token_limit": 50000,
-        "max_pages": 50,
-        "max_members": 5,
+        "daily_token_limit": 25000,
+        "max_pages": 25,
+        "max_members": 3,
         "interval": "month"
     },
     "pro": {
@@ -35,8 +35,8 @@ PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
         "amount": 2900,  # $29.00 USD in cents
         "currency": "usd",
         "daily_token_limit": 250000,
-        "max_pages": 250,
-        "max_members": 15,
+        "max_pages": 100,
+        "max_members": 10,
         "interval": "month",
         "price_id_setting": "stripe_pro_price_id"
     },
@@ -45,8 +45,8 @@ PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
         "amount": 9900,  # $99.00 USD in cents
         "currency": "usd",
         "daily_token_limit": 1000000,
-        "max_pages": 500,
-        "max_members": 50,
+        "max_pages": 150,
+        "max_members": 25,
         "interval": "month",
         "price_id_setting": "stripe_enterprise_price_id"
     }
@@ -446,9 +446,9 @@ async def downgrade_workspace_to_default_plan(workspace_id: str) -> Dict[str, An
         """
         UPDATE workspaces
         SET plan_type = 'starter',
-            daily_token_limit = 50000,
-            max_pages = 50,
-            max_members = 5,
+            daily_token_limit = 25000,
+            max_pages = 25,
+            max_members = 3,
             subscription_status = 'canceled',
             updated_at = $1
         WHERE id = $2
@@ -465,7 +465,7 @@ async def downgrade_workspace_to_default_plan(workspace_id: str) -> Dict[str, An
         now, ws_id_str
     )
 
-    # 2. Prune excess member seats (> 5)
+    # 2. Prune excess member seats (> 3)
     members = await fetch_all(
         """
         SELECT wm.user_id, wm.role, u.email, u.name
@@ -478,9 +478,9 @@ async def downgrade_workspace_to_default_plan(workspace_id: str) -> Dict[str, An
     )
 
     removed_members = []
-    if len(members) > 5:
-        keep_members = members[:5]
-        excess_members = members[5:]
+    if len(members) > 3:
+        keep_members = members[:3]
+        excess_members = members[3:]
         for m in excess_members:
             m_user_id = m["user_id"]
             m_identifier = m.get("name") or m.get("email") or str(m_user_id)
@@ -490,7 +490,7 @@ async def downgrade_workspace_to_default_plan(workspace_id: str) -> Dict[str, An
                 ws_id_str, m_user_id
             )
 
-    # 3. Prune excess document pages (> 50 pages total)
+    # 3. Prune excess document pages (> 25 pages total)
     docs = await fetch_all(
         """
         SELECT id, name, page_count, created_at
@@ -504,8 +504,8 @@ async def downgrade_workspace_to_default_plan(workspace_id: str) -> Dict[str, An
     removed_documents = []
     total_pages = sum([d.get("page_count") or 1 for d in docs])
 
-    if total_pages > 50:
-        pages_to_remove = total_pages - 50
+    if total_pages > 25:
+        pages_to_remove = total_pages - 25
         pages_removed_so_far = 0
         for doc in docs:
             if pages_removed_so_far < pages_to_remove:
@@ -593,9 +593,9 @@ async def get_payment_status(workspace_id: str) -> Dict[str, Any]:
         "workspace_id": workspace["id"],
         "plan_type": plan_key,
         "plan_name": plan_meta["name"],
-        "daily_token_limit": workspace.get("daily_token_limit", 50000),
-        "max_pages": workspace.get("max_pages", 50),
-        "max_members": workspace.get("max_members", 5),
+        "daily_token_limit": workspace.get("daily_token_limit", 25000),
+        "max_pages": workspace.get("max_pages", 25),
+        "max_members": workspace.get("max_members", 3),
         "subscription_status": workspace.get("subscription_status") or "active",
         "stripe_customer_id": workspace.get("stripe_customer_id"),
         "stripe_subscription_id": workspace.get("stripe_subscription_id"),

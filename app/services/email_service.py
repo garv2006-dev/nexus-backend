@@ -1,3 +1,12 @@
+import logging
+import httpx
+from typing import List, Optional
+
+from app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
 async def send_email(
     to_email: str,
     subject: str,
@@ -260,7 +269,7 @@ async def send_subscription_expired_downgrade_email(
         items = "".join([f"<li style='margin-bottom: 4px;'>{doc}</li>" for doc in removed_documents])
         docs_html = f"""
         <div style="margin-top: 16px; background-color: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 12px; padding: 16px;">
-          <strong style="color: #f87171; font-size: 13px;">Removed Documents (Exceeded 50 Pages Starter Limit):</strong>
+          <strong style="color: #f87171; font-size: 13px;">Removed Documents (Exceeded 25 Pages Starter Limit):</strong>
           <ul style="color: #cbd5e1; font-size: 13px; margin: 8px 0 0 0; padding-left: 20px;">{items}</ul>
         </div>
         """
@@ -272,7 +281,7 @@ async def send_subscription_expired_downgrade_email(
         items = "".join([f"<li style='margin-bottom: 4px;'>{m}</li>" for m in removed_members])
         members_html = f"""
         <div style="margin-top: 16px; background-color: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 12px; padding: 16px;">
-          <strong style="color: #f87171; font-size: 13px;">Removed Member Seats (Exceeded 5 Seats Starter Limit):</strong>
+          <strong style="color: #f87171; font-size: 13px;">Removed Member Seats (Exceeded 3 Seats Starter Limit):</strong>
           <ul style="color: #cbd5e1; font-size: 13px; margin: 8px 0 0 0; padding-left: 20px;">{items}</ul>
         </div>
         """
@@ -297,7 +306,7 @@ async def send_subscription_expired_downgrade_email(
         <div class="badge">Workspace Plan Reverted</div>
         <div class="title">Default Starter Plan Activated</div>
         <p class="text">
-          Your workspace <strong style="color: #f1f5f9;">'{workspace_name}'</strong> has completed its paid subscription period and has automatically reverted to the <strong style="color: #f1f5f9;">Default Free Starter Plan</strong> (50,000 daily tokens, 50 max pages capacity, 5 member seats).
+          Your workspace <strong style="color: #f1f5f9;">'{workspace_name}'</strong> has completed its paid subscription period and has automatically reverted to the <strong style="color: #f1f5f9;">Default Free Starter Plan</strong> (25,000 daily tokens, 25 max pages capacity, 3 member seats).
         </p>
         {docs_html}
         {members_html}

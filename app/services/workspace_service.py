@@ -47,9 +47,9 @@ async def verify_workspace_admin_or_owner(user_id: str, workspace_id: str) -> Di
 
 
 PLAN_SPECS = {
-    "starter": {"daily_token_limit": 50000, "max_pages": 50, "max_members": 5},
-    "pro": {"daily_token_limit": 250000, "max_pages": 250, "max_members": 15},
-    "enterprise": {"daily_token_limit": 1000000, "max_pages": 500, "max_members": 50},
+    "starter": {"daily_token_limit": 25000, "max_pages": 25, "max_members": 3},
+    "pro": {"daily_token_limit": 250000, "max_pages": 100, "max_members": 10},
+    "enterprise": {"daily_token_limit": 1000000, "max_pages": 150, "max_members": 25},
 }
 
 
@@ -61,7 +61,7 @@ async def create_workspace(user_id: str, name: str) -> Dict[str, Any]:
             ws_id = uuid.uuid4()
             ws_query = """
                 INSERT INTO workspaces (id, name, owner_id, plan_type, daily_token_limit, max_pages, max_members)
-                VALUES ($1, $2, $3, 'starter', 50000, 50, 5)
+                VALUES ($1, $2, $3, 'starter', 25000, 25, 3)
                 RETURNING *
             """
             ws_record = await conn.fetchrow(ws_query, ws_id, name, user_id)
@@ -87,7 +87,7 @@ async def list_user_workspaces(user_id: str) -> List[Dict[str, Any]]:
             COALESCE(w.plan_type, 'starter') as plan_type,
             w.max_members,
             w.daily_token_limit,
-            COALESCE(w.max_pages, 50) as max_pages,
+            COALESCE(w.max_pages, 25) as max_pages,
             w.created_at,
             w.updated_at,
             wm.role as user_role,
@@ -130,7 +130,7 @@ async def get_workspace_details(workspace_id: str, user_id: str) -> Dict[str, An
             COALESCE(w.plan_type, 'starter') as plan_type,
             w.max_members,
             w.daily_token_limit,
-            COALESCE(w.max_pages, 50) as max_pages,
+            COALESCE(w.max_pages, 25) as max_pages,
             w.created_at,
             w.updated_at,
             COALESCE(mc.member_count, 0) as member_count,

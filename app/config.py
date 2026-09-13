@@ -19,9 +19,9 @@ class Settings(BaseSettings):
     embedding_dimension: int = 768
 
     # Workspace & Rate Limiting Defaults
-    daily_token_limit: int = 50000
-    default_max_pages: int = 50
-    max_workspace_members: int = 5
+    daily_token_limit: int = 25000
+    default_max_pages: int = 25
+    max_workspace_members: int = 3
     max_file_size_mb: int = 15
 
     # Clerk Authentication

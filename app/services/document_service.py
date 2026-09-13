@@ -43,8 +43,8 @@ async def verify_document_upload_permission_and_limit(workspace_id: str, user_id
         )
 
     ws_uuid = uuid.UUID(str(workspace_id))
-    ws_info = await fetch_one("SELECT COALESCE(max_pages, 50) as max_pages FROM workspaces WHERE id = $1", ws_uuid)
-    max_pages = ws_info.get("max_pages", 50) if ws_info else 50
+    ws_info = await fetch_one("SELECT COALESCE(max_pages, 25) as max_pages FROM workspaces WHERE id = $1", ws_uuid)
+    max_pages = ws_info.get("max_pages", 25) if ws_info else 25
 
     from ..database import fetch_val
     curr_pages = await fetch_val("SELECT COALESCE(SUM(page_count), 0) FROM documents WHERE workspace_id = $1", ws_uuid) or 0
@@ -85,8 +85,8 @@ async def process_and_store_document(
         num_pages = len(pages)
 
         # Enforce available page space limit for this workspace
-        ws_info = await fetch_one("SELECT COALESCE(max_pages, 50) as max_pages FROM workspaces WHERE id = $1", ws_uuid)
-        max_pages = ws_info.get("max_pages", 50) if ws_info else 50
+        ws_info = await fetch_one("SELECT COALESCE(max_pages, 25) as max_pages FROM workspaces WHERE id = $1", ws_uuid)
+        max_pages = ws_info.get("max_pages", 25) if ws_info else 25
 
         from ..database import fetch_val
         used_pages = await fetch_val("SELECT COALESCE(SUM(page_count), 0) FROM documents WHERE workspace_id = $1 AND id != $2", ws_uuid, doc_id) or 0

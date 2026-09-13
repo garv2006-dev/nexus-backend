@@ -20,10 +20,11 @@ async def lifespan(app: FastAPI):
         await execute("ALTER TABLE workspace_members ADD CONSTRAINT workspace_members_role_check CHECK (role IN ('owner', 'admin', 'member'));")
         await execute("ALTER TABLE workspace_invitations DROP CONSTRAINT IF EXISTS workspace_invitations_role_check;")
         await execute("ALTER TABLE workspace_invitations ADD CONSTRAINT workspace_invitations_role_check CHECK (role IN ('owner', 'admin', 'member'));")
-        await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS plan_type TEXT NOT NULL DEFAULT 'starter';")
-        await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS max_pages INT NOT NULL DEFAULT 50;")
-        await execute("ALTER TABLE workspaces ALTER COLUMN max_pages SET DEFAULT 50;")
-        await execute("ALTER TABLE workspaces ALTER COLUMN daily_token_limit SET DEFAULT 50000;")
+        await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS max_pages INT NOT NULL DEFAULT 25;")
+        await execute("ALTER TABLE workspaces ALTER COLUMN max_pages SET DEFAULT 25;")
+        await execute("ALTER TABLE workspaces ALTER COLUMN daily_token_limit SET DEFAULT 25000;")
+        await execute("ALTER TABLE workspaces ALTER COLUMN max_members SET DEFAULT 3;")
+        await execute("UPDATE workspaces SET daily_token_limit = 25000, max_pages = 25, max_members = 3 WHERE plan_type = 'starter' OR plan_type IS NULL;")
         await execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS page_count INT DEFAULT 1;")
         
         # Stripe Payment Schema Extensions
