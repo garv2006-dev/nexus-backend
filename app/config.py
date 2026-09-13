@@ -1,33 +1,59 @@
 from functools import lru_cache
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings, loaded from environment variables / .env file."""
+    """Application settings for Production-Ready Multi-User RAG Workspace System."""
 
-    ai_provider: str = "openai"  # "openai" or "gemini"
+    # Supabase PostgreSQL
+    supabase_url: str = ""
+    supabase_secret_key: str = ""
+    database_url: str = ""
 
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
-
+    # Gemini LLM & Embedding Settings
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-2.5-flash"
+    
+    embedding_provider: str = "gemini"
+    embedding_model: str = "models/text-embedding-004"
+    embedding_dimension: int = 768
 
-    openrouter_api_key: str = ""
-    openrouter_model: str = "google/gemini-2.5-flash"
-    openrouter_max_tokens: int = 1000
+    # Workspace & Rate Limiting Defaults
+    daily_token_limit: int = 50000
+    default_max_pages: int = 50
+    max_workspace_members: int = 5
+    max_file_size_mb: int = 15
 
-    mongodb_uri: str = "mongodb://localhost:27017"
-    mongodb_db_name: str = "nexus_chat"
-
+    # Clerk Authentication
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""
 
-    credit_limit: int = 100
-    credit_reset_hours: int = 24
-
+    # CORS
     cors_origins: str = "*"
+
+    # Resend & Email Settings
+    resend_api_key: str = ""
+    email_from: str = "Nexus AI <onboarding@resend.dev>"
+    app_frontend_url: str = "http://localhost:5173"
+
+    # Direct SMTP Settings (Gmail / Brevo - No Domain Needed)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    brevo_api_key: str = ""
+
+    # Mailjet API & SMTP Settings
+    mailjet_api_key: str = ""
+    mailjet_secret_key: str = ""
+
+    # Stripe Payment Gateway Settings
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_pro_price_id: str = ""
+    stripe_enterprise_price_id: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

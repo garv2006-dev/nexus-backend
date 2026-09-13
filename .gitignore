@@ -1,13 +1,29 @@
-# --- Backend (Python) ---
-.venv/
-venv/
+# Byte-compiled / optimized / DLL files
 __pycache__/
 **/__pycache__/
+*.py[cod]
 *.pyc
-.env
+*$py.class
 
-# --- OS / editor ---
-.DS_Store
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables
+.env
+.env.local
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
 *.log
+
+# OS / editor
+.DS_Store
 .vscode/
-.idea/
+.idea/
