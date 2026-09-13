@@ -58,7 +58,5 @@ app.include_router(users.router)
 def health():
     return {
         "status": "ok",
-        "service": "Multi-User RAG Workspace System",
-        "embedding_model": settings.embedding_model,
-        "daily_limit": settings.daily_token_limit
+        "service": "Multi-User RAG Workspace System"
     }
