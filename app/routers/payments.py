@@ -13,18 +13,53 @@ from app.services import stripe_service
 router = APIRouter(prefix="/api/payments", tags=["Payments & Stripe"])
 
 
+from pydantic import BaseModel, Field, field_validator
+
+
 class CheckoutSessionRequest(BaseModel):
     workspace_id: str = Field(..., description="ID of workspace to upgrade")
     plan_id: str = Field(..., description="Target plan ID ('pro' or 'enterprise')")
+
+    @field_validator("workspace_id")
+    @classmethod
+    def validate_workspace_id(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("workspace_id cannot be empty")
+        return v
+
+    @field_validator("plan_id")
+    @classmethod
+    def validate_plan_id(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ("pro", "enterprise"):
+            raise ValueError("Invalid plan_id. Must be 'pro' or 'enterprise'")
+        return v
 
 
 class VerifyCheckoutSessionRequest(BaseModel):
     workspace_id: str = Field(..., description="ID of workspace")
     session_id: str = Field(..., description="Stripe Checkout Session ID")
 
+    @field_validator("workspace_id", "session_id")
+    @classmethod
+    def validate_non_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Field cannot be empty")
+        return v
+
 
 class CancelSubscriptionRequest(BaseModel):
     workspace_id: str = Field(..., description="ID of workspace subscription to cancel")
+
+    @field_validator("workspace_id")
+    @classmethod
+    def validate_workspace_id(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("workspace_id cannot be empty")
+        return v
 
 
 @router.post("/create-checkout-session")

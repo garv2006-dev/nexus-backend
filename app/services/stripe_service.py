@@ -171,6 +171,11 @@ async def create_checkout_session(
         session = stripe.checkout.Session.create(
             customer=customer_id,
             payment_method_types=["card"],
+            payment_method_options={
+                "card": {
+                    "request_three_d_secure": "automatic"
+                }
+            },
             line_items=line_items,
             mode="subscription",
             success_url=success_url,
