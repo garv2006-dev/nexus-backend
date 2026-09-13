@@ -13,7 +13,8 @@ from app.config import get_settings
 from app.database import fetch_one, execute, fetch_all
 from app.services.email_service import (
     send_subscription_canceled_email,
-    send_subscription_expired_downgrade_email
+    send_subscription_expired_downgrade_email,
+    send_payment_invoice_email
 )
 
 settings = get_settings()
@@ -681,20 +682,81 @@ async def process_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
                 user_id or "system", workspace_id, customer_id, session_id,
                 payment_intent_id, subscription_id, plan_id, plan_meta["amount"],
                 plan_meta["currency"], now
-            )
+            # 3. Dispatch Payment Invoice Email to Workspace Owner
+            try:
+                ws_data = await fetch_one("SELECT name, owner_id FROM workspaces WHERE id = $1", workspace_id)
+                if ws_data and ws_data.get("owner_id"):
+                    owner = await fetch_one("SELECT email FROM users WHERE id = $1", ws_data["owner_id"])
+                    if owner and owner.get("email"):
+                        amount_fmt = f"${plan_meta['amount'] / 100:.2f} USD"
+                        pay_date_str = now.strftime("%B %d, %Y")
+                        next_date_str = period_end.strftime("%B %d, %Y")
+                        await send_payment_invoice_email(
+                            to_email=owner["email"],
+                            workspace_name=ws_data["name"],
+                            plan_name=plan_meta["name"],
+                            amount_str=amount_fmt,
+                            payment_date_str=pay_date_str,
+                            next_billing_date_str=next_date_str
+                        )
+            except Exception as e:
+                print(f"Failed to send invoice email on checkout completion: {e}")
 
-    elif event_type in ("payment_intent.succeeded", "invoice.paid"):
+    elif event_type in ("invoice.paid", "payment_intent.succeeded"):
         payment_intent_id = data_object.get("payment_intent") or data_object.get("id")
         customer_id = data_object.get("customer")
-        if payment_intent_id:
+        subscription_id = data_object.get("subscription")
+
+        if payment_intent_id or customer_id or subscription_id:
+            now = datetime.datetime.now(datetime.timezone.utc)
+            next_period_end = now + datetime.timedelta(days=30)
+
             await execute(
                 """
                 UPDATE payments
-                SET payment_status = 'succeeded', completed_at = now()
-                WHERE stripe_payment_intent_id = $1 OR stripe_customer_id = $2
+                SET payment_status = 'succeeded', completed_at = $1
+                WHERE stripe_payment_intent_id = $2 OR stripe_customer_id = $3
                 """,
-                payment_intent_id, customer_id
+                now, payment_intent_id, customer_id
             )
+
+            # Auto-renew active subscription period & dispatch monthly invoice email
+            ws_rec = await fetch_one(
+                "SELECT id, name, plan_type, owner_id FROM workspaces WHERE stripe_customer_id = $1 OR stripe_subscription_id = $2",
+                customer_id, subscription_id
+            )
+            if ws_rec:
+                plan_k = ws_rec.get("plan_type", "pro")
+                plan_meta = PLAN_CONFIG.get(plan_k, PLAN_CONFIG["pro"])
+
+                await execute(
+                    """
+                    UPDATE workspaces
+                    SET subscription_status = 'active',
+                        current_period_end = $1,
+                        updated_at = $2
+                    WHERE id = $3
+                    """,
+                    next_period_end, now, ws_rec["id"]
+                )
+
+                if ws_rec.get("owner_id"):
+                    try:
+                        owner = await fetch_one("SELECT email FROM users WHERE id = $1", ws_rec["owner_id"])
+                        if owner and owner.get("email"):
+                            amount_fmt = f"${plan_meta['amount'] / 100:.2f} USD"
+                            pay_date_str = now.strftime("%B %d, %Y")
+                            next_date_str = next_period_end.strftime("%B %d, %Y")
+                            await send_payment_invoice_email(
+                                to_email=owner["email"],
+                                workspace_name=ws_rec["name"],
+                                plan_name=plan_meta["name"],
+                                amount_str=amount_fmt,
+                                payment_date_str=pay_date_str,
+                                next_billing_date_str=next_date_str
+                            )
+                    except Exception as e:
+                        print(f"Failed to send monthly invoice email on renewal: {e}")
 
     elif event_type in ("payment_intent.payment_failed", "invoice.payment_failed"):
         payment_intent_id = data_object.get("payment_intent") or data_object.get("id")

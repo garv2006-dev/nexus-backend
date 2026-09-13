@@ -315,3 +315,62 @@ async def send_subscription_expired_downgrade_email(
     return await send_email(to_email, subject, html_content, plain_text)
 
 
+async def send_payment_invoice_email(
+    to_email: str,
+    workspace_name: str,
+    plan_name: str,
+    amount_str: str,
+    payment_date_str: str,
+    next_billing_date_str: str
+) -> bool:
+    """
+    Sends a monthly payment receipt / invoice email to the workspace owner upon successful recurring payment or subscription activation.
+    """
+    subject = f"Payment Receipt & Invoice for '{workspace_name}' - {plan_name}"
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #090d16; color: #f8fafc; margin: 0; padding: 40px 20px; }}
+        .card {{ max-width: 520px; margin: 0 auto; background-color: #0f172a; border: 1px solid #1e293b; border-radius: 20px; padding: 36px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); }}
+        .badge {{ display: inline-block; background-color: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9999px; border: 1px solid rgba(16, 185, 129, 0.3); margin-bottom: 16px; }}
+        .title {{ font-size: 20px; font-weight: 700; color: #ffffff; margin-bottom: 12px; }}
+        .text {{ font-size: 14px; color: #94a3b8; line-height: 1.6; margin-bottom: 20px; }}
+        .invoice-box {{ background-color: #1e293b; border-radius: 12px; padding: 20px; margin: 20px 0; border: 1px solid #334155; }}
+        .row {{ display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 13px; color: #cbd5e1; }}
+        .row-total {{ display: flex; justify-content: space-between; padding-top: 10px; border-top: 1px solid #334155; font-size: 15px; font-weight: 700; color: #ffffff; }}
+        .footer {{ font-size: 12px; color: #64748b; margin-top: 32px; border-top: 1px solid #1e293b; padding-top: 20px; text-align: center; }}
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="badge">Payment Invoice & Receipt</div>
+        <div class="title">Subscription Renewal Successful</div>
+        <p class="text">
+          Thank you for continuing your subscription! Your monthly payment for workspace <strong style="color: #f1f5f9;">'{workspace_name}'</strong> has been processed successfully.
+        </p>
+        <div class="invoice-box">
+          <div class="row"><span>Workspace:</span><strong>{workspace_name}</strong></div>
+          <div class="row"><span>Subscription Plan:</span><strong>{plan_name}</strong></div>
+          <div class="row"><span>Payment Date:</span><span>{payment_date_str}</span></div>
+          <div class="row"><span>Next Billing Date:</span><span>{next_billing_date_str}</span></div>
+          <div class="row-total"><span>Amount Paid:</span><span style="color: #34d399;">{amount_str}</span></div>
+        </div>
+        <p class="text" style="font-size: 13px;">
+          Your workspace quotas and capabilities remain fully active. You can manage your subscription settings anytime from the Plan page.
+        </p>
+        <div class="footer">Nexus AI Workspace System • Multi-Tenant RAG</div>
+      </div>
+    </body>
+    </html>
+    """
+
+    plain_text = f"Payment Invoice for '{workspace_name}' - {plan_name}\nAmount Paid: {amount_str}\nPayment Date: {payment_date_str}\nNext Billing Date: {next_billing_date_str}"
+
+    return await send_email(to_email, subject, html_content, plain_text)
+
+
+
