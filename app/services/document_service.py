@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from ..database import fetch_one, fetch_all, execute, get_pool
 from .workspace_service import verify_workspace_member
 from .ingestion_service import extract_text_from_file, chunk_extracted_pages
-from .embedding_service import generate_embeddings_batch
+from .embedding_service import generate_embeddings_batch_async
 
 
 async def list_workspace_documents(workspace_id: str, user_id: str) -> List[Dict[str, Any]]:
@@ -107,7 +107,7 @@ async def process_and_store_document(
         # 4. Generate embeddings
         await execute("UPDATE documents SET status = 'embedding' WHERE id = $1", doc_id)
         chunk_texts = [c["content"] for c in chunks]
-        embeddings = generate_embeddings_batch(chunk_texts)
+        embeddings = await generate_embeddings_batch_async(chunk_texts)
 
         # 5. Insert chunks + pgvectors into vector store database
         pool = await get_pool()

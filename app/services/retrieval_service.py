@@ -1,7 +1,7 @@
 import uuid
 from typing import Dict, List, Any
 from ..database import fetch_all
-from .embedding_service import generate_embedding
+from .embedding_service import generate_embedding_async
 
 
 async def perform_hybrid_search(
@@ -15,12 +15,13 @@ async def perform_hybrid_search(
     Executes multi-tenant hybrid search (vector similarity + full-text keyword search)
     using the Supabase stored procedure `match_chunks_hybrid`.
     Enforces strict workspace authorization filtering (`workspace_id = current_workspace_id`).
+    Non-blocking async vector embedding generation.
     """
     if not query_text or not query_text.strip():
         return []
 
     ws_uuid = uuid.UUID(str(workspace_id))
-    query_embedding = generate_embedding(query_text, task_type="retrieval_query")
+    query_embedding = await generate_embedding_async(query_text, task_type="retrieval_query")
     vec_str = "[" + ",".join(str(f) for f in query_embedding) + "]"
 
     query = """

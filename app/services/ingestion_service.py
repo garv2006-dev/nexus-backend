@@ -102,8 +102,8 @@ def extract_text_from_file(file_bytes: bytes, file_name: str) -> List[Dict[str, 
 
 def chunk_extracted_pages(
     pages: List[Dict[str, Any]],
-    target_chunk_chars: int = 3500,  # ~800-1000 tokens
-    overlap_chars: int = 500         # ~125 tokens
+    target_chunk_chars: int = 1800,  # ~400-450 tokens (optimized for precision & token cost)
+    overlap_chars: int = 300         # ~75 tokens overlap
 ) -> List[Dict[str, Any]]:
     """
     Paragraph-aware semantic text chunker.
