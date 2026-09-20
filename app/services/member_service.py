@@ -1,16 +1,26 @@
 import uuid
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from fastapi import HTTPException
 from ..database import fetch_one, fetch_all, fetch_val, execute, get_pool
 from ..config import get_settings
+from ..auth import format_user_display_name
 from .workspace_service import verify_workspace_member, verify_workspace_owner
 from .email_service import send_workspace_invitation_email
+
+
+def _sql_user_display_name(fallback: str = "Workspace Member") -> str:
+    return f"""COALESCE(
+        NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+        NULLIF(CASE WHEN u.name ILIKE 'User user_%' THEN '' ELSE u.name END, ''),
+        INITCAP(REPLACE(REPLACE(SPLIT_PART(u.email, '@', 1), '.', ' '), '_', ' ')),
+        '{fallback}'
+    )"""
 
 
 async def list_workspace_members(workspace_id: str, user_id: str) -> List[Dict[str, Any]]:
     """Lists all members in the workspace after verifying authorization."""
     await verify_workspace_member(user_id, workspace_id)
-    query = """
+    query = f"""
         SELECT 
             wm.id,
             wm.workspace_id,
@@ -18,14 +28,9 @@ async def list_workspace_members(workspace_id: str, user_id: str) -> List[Dict[s
             wm.role,
             wm.joined_at,
             u.email,
-            COALESCE(
-                NULLIF(
-                    CASE WHEN u.name ILIKE 'User user_%' THEN '' ELSE u.name END, 
-                    ''
-                ),
-                INITCAP(REPLACE(REPLACE(SPLIT_PART(u.email, '@', 1), '.', ' '), '_', ' ')),
-                'Workspace Member'
-            ) as name,
+            u.first_name,
+            u.last_name,
+            {_sql_user_display_name('Workspace Member')} as name,
             u.avatar_url
         FROM workspace_members wm
         JOIN users u ON u.id = wm.user_id
@@ -42,7 +47,13 @@ async def list_workspace_members(workspace_id: str, user_id: str) -> List[Dict[s
     return res
 
 
-async def invite_member(workspace_id: str, inviter_id: str, target_email: str, role: str = "member") -> Dict[str, Any]:
+async def invite_member(
+    workspace_id: str,
+    inviter_id: str,
+    target_email: str,
+    role: str = "member",
+    inviter_name_override: Optional[str] = None
+) -> Dict[str, Any]:
     """Sends an invitation to join the workspace with a specified role after checking limits."""
     ws = await verify_workspace_owner(inviter_id, workspace_id)
     ws_uuid = uuid.UUID(str(workspace_id))
@@ -75,8 +86,34 @@ async def invite_member(workspace_id: str, inviter_id: str, target_email: str, r
         raise HTTPException(status_code=400, detail="User is already a member of this workspace.")
 
     # 3. Fetch inviter details for email messaging
-    inviter = await fetch_one("SELECT name, email FROM users WHERE id = $1", inviter_id)
-    inviter_name = inviter["name"] if (inviter and inviter.get("name")) else (inviter["email"] if inviter else "A team member")
+    inviter = await fetch_one("SELECT name, first_name, last_name, email FROM users WHERE id = $1", inviter_id)
+    inviter_full = format_user_display_name(
+        first_name=inviter.get("first_name") if inviter else None,
+        last_name=inviter.get("last_name") if inviter else None,
+        raw_name=inviter.get("name") if inviter else None,
+        email=inviter.get("email") if inviter else None,
+        default_fallback="A team member"
+    )
+
+    clean_override = (inviter_name_override or "").strip()
+    inviter_name = clean_override or inviter_full or "A team member"
+
+    if clean_override and " " in clean_override:
+        try:
+            parts = clean_override.split(" ", 1)
+            f_name, l_name = parts[0], parts[1]
+            await execute(
+                """
+                UPDATE users 
+                SET name = $1,
+                    first_name = COALESCE(NULLIF(first_name, ''), $2),
+                    last_name = COALESCE(NULLIF(last_name, ''), $3)
+                WHERE id = $4
+                """,
+                clean_override, f_name, l_name, inviter_id
+            )
+        except Exception:
+            pass
 
     # 4. Create pending invitation with specified role
     query = """
@@ -105,7 +142,7 @@ async def invite_member(workspace_id: str, inviter_id: str, target_email: str, r
 async def list_workspace_pending_invitations(workspace_id: str, user_id: str) -> List[Dict[str, Any]]:
     """Lists pending invitations sent for a specific workspace (members page view)."""
     await verify_workspace_member(user_id, workspace_id)
-    query = """
+    query = f"""
         SELECT 
             wi.id,
             wi.workspace_id,
@@ -113,7 +150,10 @@ async def list_workspace_pending_invitations(workspace_id: str, user_id: str) ->
             wi.role,
             wi.status,
             wi.created_at,
-            u.name as inviter_name,
+            wi.invited_by,
+            u.first_name as inviter_first_name,
+            u.last_name as inviter_last_name,
+            {_sql_user_display_name('Workspace Admin')} as inviter_name,
             u.email as inviter_email
         FROM workspace_invitations wi
         JOIN users u ON u.id = wi.invited_by
@@ -147,7 +187,7 @@ async def list_pending_invitations_for_user(user_email: str) -> List[Dict[str, A
     """Lists pending workspace invitations for the specified user email."""
     if not user_email:
         return []
-    query = """
+    query = f"""
         SELECT 
             wi.id,
             wi.workspace_id,
@@ -155,8 +195,11 @@ async def list_pending_invitations_for_user(user_email: str) -> List[Dict[str, A
             wi.role,
             wi.status,
             wi.created_at,
+            wi.invited_by,
             w.name as workspace_name,
-            u.name as inviter_name,
+            u.first_name as inviter_first_name,
+            u.last_name as inviter_last_name,
+            {_sql_user_display_name('Workspace Admin')} as inviter_name,
             u.email as inviter_email
         FROM workspace_invitations wi
         JOIN workspaces w ON w.id = wi.workspace_id
@@ -172,6 +215,7 @@ async def list_pending_invitations_for_user(user_email: str) -> List[Dict[str, A
         item["workspace_id"] = str(item["workspace_id"])
         res.append(item)
     return res
+
 
 
 async def accept_invitation(invitation_id: str, user: Dict[str, Any]) -> Dict[str, Any]:

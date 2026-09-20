@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 import stripe
 from fastapi import HTTPException
 
-from app.config import get_settings
+from app.config import get_settings, PLAN_SPECS
 from app.database import fetch_one, execute, fetch_all
 from app.services.email_service import (
     send_subscription_canceled_email,
@@ -20,37 +20,8 @@ from app.services.email_service import (
 settings = get_settings()
 
 # Server-side pricing dictionary (source of truth for plans, pricing, and resource limits)
-PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
-    "starter": {
-        "name": "Starter / Free Plan",
-        "amount": 0,
-        "currency": "usd",
-        "daily_token_limit": 25000,
-        "max_pages": 25,
-        "max_members": 3,
-        "interval": "month"
-    },
-    "pro": {
-        "name": "Pro Plan",
-        "amount": 2900,  # $29.00 USD in cents
-        "currency": "usd",
-        "daily_token_limit": 250000,
-        "max_pages": 100,
-        "max_members": 10,
-        "interval": "month",
-        "price_id_setting": "stripe_pro_price_id"
-    },
-    "enterprise": {
-        "name": "Enterprise Plan",
-        "amount": 9900,  # $99.00 USD in cents
-        "currency": "usd",
-        "daily_token_limit": 1000000,
-        "max_pages": 150,
-        "max_members": 25,
-        "interval": "month",
-        "price_id_setting": "stripe_enterprise_price_id"
-    }
-}
+PLAN_CONFIG: Dict[str, Dict[str, Any]] = PLAN_SPECS
+
 
 
 def init_stripe():

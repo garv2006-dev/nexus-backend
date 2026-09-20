@@ -1,10 +1,29 @@
 import uuid
 from typing import Dict, List, Any
 from fastapi import HTTPException
-from ..database import fetch_one, fetch_all, execute, get_pool
+from ..database import fetch_one, fetch_all, fetch_val, execute, get_pool
 from .workspace_service import verify_workspace_member
 from .ingestion_service import extract_text_from_file, chunk_extracted_pages
 from .embedding_service import generate_embeddings_batch_async
+
+
+async def get_workspace_page_usage(workspace_id: uuid.UUID, exclude_doc_id: uuid.UUID = None) -> tuple[int, int]:
+    """Returns (used_pages, max_pages) for the specified workspace."""
+    ws_info = await fetch_one("SELECT COALESCE(max_pages, 25) as max_pages FROM workspaces WHERE id = $1", workspace_id)
+    max_pages = ws_info.get("max_pages", 25) if ws_info else 25
+
+    if exclude_doc_id:
+        used_pages = await fetch_val(
+            "SELECT COALESCE(SUM(page_count), 0) FROM documents WHERE workspace_id = $1 AND id != $2",
+            workspace_id, exclude_doc_id
+        ) or 0
+    else:
+        used_pages = await fetch_val(
+            "SELECT COALESCE(SUM(page_count), 0) FROM documents WHERE workspace_id = $1",
+            workspace_id
+        ) or 0
+
+    return used_pages, max_pages
 
 
 async def list_workspace_documents(workspace_id: str, user_id: str) -> List[Dict[str, Any]]:
@@ -43,11 +62,7 @@ async def verify_document_upload_permission_and_limit(workspace_id: str, user_id
         )
 
     ws_uuid = uuid.UUID(str(workspace_id))
-    ws_info = await fetch_one("SELECT COALESCE(max_pages, 25) as max_pages FROM workspaces WHERE id = $1", ws_uuid)
-    max_pages = ws_info.get("max_pages", 25) if ws_info else 25
-
-    from ..database import fetch_val
-    curr_pages = await fetch_val("SELECT COALESCE(SUM(page_count), 0) FROM documents WHERE workspace_id = $1", ws_uuid) or 0
+    curr_pages, max_pages = await get_workspace_page_usage(ws_uuid)
     if curr_pages >= max_pages:
         raise HTTPException(
             status_code=400,
@@ -85,17 +100,14 @@ async def process_and_store_document(
         num_pages = len(pages)
 
         # Enforce available page space limit for this workspace
-        ws_info = await fetch_one("SELECT COALESCE(max_pages, 25) as max_pages FROM workspaces WHERE id = $1", ws_uuid)
-        max_pages = ws_info.get("max_pages", 25) if ws_info else 25
-
-        from ..database import fetch_val
-        used_pages = await fetch_val("SELECT COALESCE(SUM(page_count), 0) FROM documents WHERE workspace_id = $1 AND id != $2", ws_uuid, doc_id) or 0
+        used_pages, max_pages = await get_workspace_page_usage(ws_uuid, exclude_doc_id=doc_id)
         avail_pages = max_pages - used_pages
 
         if num_pages > avail_pages:
             raise ValueError(
                 f"Document rejected: '{file_name}' contains {num_pages} pages, but only {avail_pages} pages space available ({used_pages}/{max_pages} pages used). Upgrade workspace plan to process larger documents."
             )
+
 
         # 3. Chunk text & update page_count
         await execute("UPDATE documents SET status = 'chunking', page_count = $1 WHERE id = $2", num_pages, doc_id)

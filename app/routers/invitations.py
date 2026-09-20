@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, EmailStr
 
@@ -11,6 +11,7 @@ router = APIRouter(tags=["invitations_and_members"])
 class InvitePayload(BaseModel):
     email: EmailStr
     role: str = "member"  # 'owner', 'admin', 'member'
+    inviter_name: Optional[str] = None
 
 
 @router.get("/api/workspaces/{workspace_id}/members", response_model=List[dict])
@@ -28,7 +29,8 @@ async def invite_member(
         workspace_id=workspace_id,
         inviter_id=user["id"],
         target_email=payload.email,
-        role=payload.role
+        role=payload.role,
+        inviter_name_override=payload.inviter_name
     )
 
 

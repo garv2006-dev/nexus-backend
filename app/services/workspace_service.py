@@ -46,11 +46,20 @@ async def verify_workspace_admin_or_owner(user_id: str, workspace_id: str) -> Di
     return member
 
 
-PLAN_SPECS = {
-    "starter": {"daily_token_limit": 25000, "max_pages": 25, "max_members": 3},
-    "pro": {"daily_token_limit": 250000, "max_pages": 100, "max_members": 10},
-    "enterprise": {"daily_token_limit": 1000000, "max_pages": 150, "max_members": 25},
-}
+from ..config import PLAN_SPECS
+
+WORKSPACE_STATS_JOINS = """
+    LEFT JOIN (
+        SELECT workspace_id, COUNT(*) as member_count
+        FROM workspace_members
+        GROUP BY workspace_id
+    ) mc ON mc.workspace_id = w.id
+    LEFT JOIN (
+        SELECT workspace_id, COUNT(*) as doc_count, COALESCE(SUM(page_count), 0) as total_pages
+        FROM documents
+        GROUP BY workspace_id
+    ) dc ON dc.workspace_id = w.id
+"""
 
 
 async def create_workspace(user_id: str, name: str) -> Dict[str, Any]:
@@ -79,7 +88,7 @@ async def create_workspace(user_id: str, name: str) -> Dict[str, Any]:
 
 async def list_user_workspaces(user_id: str) -> List[Dict[str, Any]]:
     """Lists all workspaces accessible to the user along with plan details, member & document/page counts."""
-    query = """
+    query = f"""
         SELECT 
             w.id,
             w.name,
@@ -96,16 +105,7 @@ async def list_user_workspaces(user_id: str) -> List[Dict[str, Any]]:
             COALESCE(dc.total_pages, 0) as page_count
         FROM workspace_members wm
         JOIN workspaces w ON w.id = wm.workspace_id
-        LEFT JOIN (
-            SELECT workspace_id, COUNT(*) as member_count
-            FROM workspace_members
-            GROUP BY workspace_id
-        ) mc ON mc.workspace_id = w.id
-        LEFT JOIN (
-            SELECT workspace_id, COUNT(*) as doc_count, COALESCE(SUM(page_count), 0) as total_pages
-            FROM documents
-            GROUP BY workspace_id
-        ) dc ON dc.workspace_id = w.id
+        {WORKSPACE_STATS_JOINS}
         WHERE wm.user_id = $1
         ORDER BY w.created_at DESC
     """
@@ -122,7 +122,7 @@ async def list_user_workspaces(user_id: str) -> List[Dict[str, Any]]:
 async def get_workspace_details(workspace_id: str, user_id: str) -> Dict[str, Any]:
     """Gets details for a specific workspace after verifying membership."""
     await verify_workspace_member(user_id, workspace_id)
-    query = """
+    query = f"""
         SELECT 
             w.id,
             w.name,
@@ -137,18 +137,10 @@ async def get_workspace_details(workspace_id: str, user_id: str) -> Dict[str, An
             COALESCE(dc.doc_count, 0) as document_count,
             COALESCE(dc.total_pages, 0) as page_count
         FROM workspaces w
-        LEFT JOIN (
-            SELECT workspace_id, COUNT(*) as member_count
-            FROM workspace_members
-            GROUP BY workspace_id
-        ) mc ON mc.workspace_id = w.id
-        LEFT JOIN (
-            SELECT workspace_id, COUNT(*) as doc_count, COALESCE(SUM(page_count), 0) as total_pages
-            FROM documents
-            GROUP BY workspace_id
-        ) dc ON dc.workspace_id = w.id
+        {WORKSPACE_STATS_JOINS}
         WHERE w.id = $1
     """
+
     ws = await fetch_one(query, uuid.UUID(str(workspace_id)))
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found.")

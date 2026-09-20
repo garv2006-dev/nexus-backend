@@ -27,7 +27,10 @@ async def lifespan(app: FastAPI):
         await execute("UPDATE workspaces SET daily_token_limit = 25000, max_pages = 25, max_members = 3 WHERE plan_type = 'starter' OR plan_type IS NULL;")
         await execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS page_count INT DEFAULT 1;")
         
-        # Stripe Payment Schema Extensions
+        # User schema extensions
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT;")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT;")
+        await execute("UPDATE users SET name = 'Garv Variya', first_name = 'Garv', last_name = 'Variya' WHERE (email ILIKE '%garvvariya03%' OR name ILIKE '%garvvariya03%') AND (first_name IS NULL OR first_name = '');")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
         await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;")
         await execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;")

@@ -65,3 +65,37 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+PLAN_SPECS = {
+    "starter": {
+        "name": "Starter / Free Plan",
+        "amount": 0,
+        "currency": "usd",
+        "daily_token_limit": 25000,
+        "max_pages": 25,
+        "max_members": 3,
+        "interval": "month"
+    },
+    "pro": {
+        "name": "Pro Plan",
+        "amount": 2900,  # $29.00 USD in cents
+        "currency": "usd",
+        "daily_token_limit": 250000,
+        "max_pages": 100,
+        "max_members": 10,
+        "interval": "month",
+        "price_id_setting": "stripe_pro_price_id"
+    },
+    "enterprise": {
+        "name": "Enterprise Plan",
+        "amount": 9900,  # $99.00 USD in cents
+        "currency": "usd",
+        "daily_token_limit": 1000000,
+        "max_pages": 150,
+        "max_members": 25,
+        "interval": "month",
+        "price_id_setting": "stripe_enterprise_price_id"
+    }
+}
+

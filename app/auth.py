@@ -46,6 +46,29 @@ async def get_current_claims(authorization: str | None = Header(None)) -> dict:
     return claims
 
 
+def format_user_display_name(
+    first_name: str | None = None,
+    last_name: str | None = None,
+    raw_name: str | None = None,
+    email: str | None = None,
+    user_id: str | None = None,
+    default_fallback: str = "Workspace Member"
+) -> str:
+    """Consolidated helper to compute a clean user display name from available user attributes."""
+    fn = (first_name or "").strip()
+    ln = (last_name or "").strip()
+    full = f"{fn} {ln}".strip()
+    if full:
+        return full
+    if raw_name and raw_name.strip() and not raw_name.strip().lower().startswith("user user_"):
+        return raw_name.strip()
+    if email and "@" in email:
+        return email.split("@")[0].replace(".", " ").replace("_", " ").title()
+    if user_id:
+        return f"User {user_id[:8]}"
+    return default_fallback
+
+
 async def get_current_user(
     claims: dict = Depends(get_current_claims),
     x_user_email: str | None = Header(None, alias="X-User-Email")
@@ -68,40 +91,47 @@ async def get_current_user(
     if email:
         email = email.strip().lower()
 
+    first_name = (claims.get("given_name") or claims.get("first_name") or "").strip() or None
+    last_name = (claims.get("family_name") or claims.get("last_name") or "").strip() or None
+
     raw_name = claims.get("name") or claims.get("full_name")
-    if raw_name and raw_name.strip() and not raw_name.lower().startswith("user user_"):
-        name = raw_name.strip()
-    elif email and "@" in email:
-        name = email.split("@")[0].replace(".", " ").replace("_", " ").title()
-    else:
-        name = f"User {user_id[:8]}"
+    name = format_user_display_name(first_name, last_name, raw_name, email, user_id)
 
     avatar_url = claims.get("picture") or claims.get("image_url") or None
+
 
     user = await fetch_one("SELECT * FROM users WHERE id = $1", user_id)
 
     if user is None:
         query = """
-            INSERT INTO users (id, email, name, avatar_url)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO users (id, email, name, first_name, last_name, avatar_url)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (id) DO UPDATE SET
                 email = CASE WHEN EXCLUDED.email IS NOT NULL AND EXCLUDED.email != '' THEN EXCLUDED.email ELSE users.email END,
                 name = CASE WHEN EXCLUDED.name IS NOT NULL AND EXCLUDED.name != '' THEN EXCLUDED.name ELSE users.name END,
+                first_name = COALESCE(EXCLUDED.first_name, users.first_name),
+                last_name = COALESCE(EXCLUDED.last_name, users.last_name),
                 avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url)
             RETURNING *
         """
-        user = await fetch_one(query, user_id, email, name, avatar_url)
+        user = await fetch_one(query, user_id, email, name, first_name, last_name, avatar_url)
     else:
-        # Update user email, name, or avatar if updated or previously missing
+        # Update user email, name, first_name, last_name, or avatar if updated
         updates = []
         params = [user_id]
         if email and user.get("email") != email:
             params.append(email)
             updates.append(f"email = ${len(params)}")
-        if name and (not user.get("name") or user.get("name").lower().startswith("user ")):
+        if first_name and user.get("first_name") != first_name:
+            params.append(first_name)
+            updates.append(f"first_name = ${len(params)}")
+        if last_name and user.get("last_name") != last_name:
+            params.append(last_name)
+            updates.append(f"last_name = ${len(params)}")
+        if name and name != user.get("name") and not name.lower().startswith("user user_"):
             params.append(name)
             updates.append(f"name = ${len(params)}")
-        if avatar_url and not user.get("avatar_url"):
+        if avatar_url and user.get("avatar_url") != avatar_url:
             params.append(avatar_url)
             updates.append(f"avatar_url = ${len(params)}")
 

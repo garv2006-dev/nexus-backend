@@ -1,68 +1,59 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel, ConfigDict, Field
 
-from pydantic import BaseModel, ConfigDict
 
-
-# --- Users / profile -----------------------------------------------------
+# --- Users / Profile -----------------------------------------------------
 
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: str  # Clerk user id
+    id: str
     email: str
     name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     avatar_url: Optional[str] = None
-    bio: Optional[str] = None
-    credits: int
-    credits_reset_at: datetime
-    created_at: datetime
+    stripe_customer_id: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
-class UserSync(BaseModel):
-    """Sent once after Clerk sign-in so we have display info to store locally."""
-
-    email: str
-    name: str
-    avatar_url: Optional[str] = None
-
-
-class ProfileUpdate(BaseModel):
+class UserProfileUpdatePayload(BaseModel):
+    first_name: Optional[str] = Field(None, alias="firstName")
+    last_name: Optional[str] = Field(None, alias="lastName")
     name: Optional[str] = None
-    bio: Optional[str] = None
-    avatar_url: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = Field(None, alias="avatarUrl")
+
+    class Config:
+        populate_by_name = True
 
 
-# --- Chat ------------------------------------------------------------------
+# --- Conversations & Messages -------------------------------------------
 
 class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    conversation_id: str
     role: str
     content: str
-    created_at: datetime
+    sources: Optional[list] = None
+    token_usage: Optional[int] = 0
+    created_at: Optional[datetime] = None
 
 
-class SessionOut(BaseModel):
+class ConversationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    workspace_id: str
+    user_id: str
     title: str
-    created_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
-class SessionDetailOut(SessionOut):
-    messages: list[MessageOut] = []
+class ConversationDetailOut(ConversationOut):
+    messages: List[MessageOut] = []
 
-
-class SessionCreate(BaseModel):
-    title: Optional[str] = None
-
-
-class SessionRename(BaseModel):
-    title: str
-
-
-class MessageCreate(BaseModel):
-    content: str
