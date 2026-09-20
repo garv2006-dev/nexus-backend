@@ -38,7 +38,7 @@ async def get_current_claims(authorization: str | None = Header(None)) -> dict:
             algorithms=["RS256"],
             issuer=settings.clerk_issuer or None,
             options={"verify_aud": False},
-            leeway=86400,
+            leeway=60,
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(status_code=401, detail=f"Invalid session token: {exc}")
@@ -70,26 +70,23 @@ def format_user_display_name(
 
 
 async def get_current_user(
-    claims: dict = Depends(get_current_claims),
-    x_user_email: str | None = Header(None, alias="X-User-Email")
+    claims: dict = Depends(get_current_claims)
 ) -> dict:
     """
     Returns the user record from Supabase PostgreSQL, creating or updating
-    it on first sight. Syncs user email from claims or X-User-Email header.
+    it on first sight. Syncs user email strictly from authenticated claims.
     """
     user_id = claims.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="User ID (sub) missing from token")
 
-    header_email = (x_user_email or "").strip().lower()
     email = (
         claims.get("email")
         or claims.get("email_address")
         or claims.get("primary_email_address")
-        or header_email
     )
     if email:
-        email = email.strip().lower()
+        email = str(email).strip().lower()
 
     first_name = (claims.get("given_name") or claims.get("first_name") or "").strip() or None
     last_name = (claims.get("family_name") or claims.get("last_name") or "").strip() or None

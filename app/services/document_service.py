@@ -2,7 +2,7 @@ import uuid
 from typing import Dict, List, Any
 from fastapi import HTTPException
 from ..database import fetch_one, fetch_all, fetch_val, execute, get_pool
-from .workspace_service import verify_workspace_member
+from .workspace_service import verify_workspace_member, verify_workspace_admin_or_owner
 from .ingestion_service import extract_text_from_file, chunk_extracted_pages
 from .embedding_service import generate_embeddings_batch_async
 
@@ -168,8 +168,8 @@ async def process_and_store_document(
 
 
 async def delete_document(workspace_id: str, user_id: str, document_id: str) -> bool:
-    """Deletes document metadata and all associated chunks & embeddings (cascading)."""
-    await verify_workspace_member(user_id, workspace_id)
+    """Deletes document metadata and all associated chunks & embeddings (cascading). Requires Owner/Admin."""
+    await verify_workspace_admin_or_owner(user_id, workspace_id)
     doc_uuid = uuid.UUID(str(document_id))
     ws_uuid = uuid.UUID(str(workspace_id))
 

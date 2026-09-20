@@ -64,10 +64,9 @@ async def remove_member(
 
 @router.get("/api/invitations", response_model=List[dict])
 async def list_user_invitations(
-    user: dict = Depends(get_current_user),
-    x_user_email: str | None = Header(None, alias="X-User-Email")
+    user: dict = Depends(get_current_user)
 ):
-    email = user.get("email") or x_user_email or ""
+    email = user.get("email") or ""
     return await member_service.list_pending_invitations_for_user(email)
 
 

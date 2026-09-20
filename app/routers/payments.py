@@ -8,9 +8,12 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 
 from app.auth import get_current_user
+from app.config import get_settings
 from app.services import stripe_service
+from app.services.workspace_service import verify_workspace_member, verify_workspace_admin_or_owner
 
 router = APIRouter(prefix="/api/payments", tags=["Payments & Stripe"])
+settings = get_settings()
 
 
 from pydantic import BaseModel, Field, field_validator
@@ -94,7 +97,9 @@ async def verify_checkout_session(
 ):
     """
     Verifies Stripe session status upon redirect return and immediately activates workspace plan.
+    Requires workspace owner or admin permission.
     """
+    await verify_workspace_admin_or_owner(current_user["id"], payload.workspace_id)
     result = await stripe_service.verify_and_fulfill_checkout_session(
         session_id=payload.session_id,
         workspace_id=payload.workspace_id
@@ -112,7 +117,9 @@ async def get_workspace_payment_status(
 ):
     """
     Retrieves the current subscription tier, quota limits, and payment history for a workspace.
+    Requires workspace membership authorization.
     """
+    await verify_workspace_member(current_user["id"], workspace_id)
     status_data = await stripe_service.get_payment_status(workspace_id)
     return {
         "status": "success",
@@ -149,8 +156,10 @@ async def stripe_webhook(
 
     if stripe_signature:
         event = stripe_service.verify_webhook_signature(payload, stripe_signature)
+    elif settings.stripe_webhook_secret:
+        raise HTTPException(status_code=400, detail="Missing required Stripe-Signature header")
     else:
-        # Development fallback when raw signature isn't passed during local manual post
+        # Development fallback when Stripe secret key is not configured locally
         try:
             event = await request.json()
         except Exception:

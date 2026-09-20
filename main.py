@@ -1,5 +1,7 @@
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
@@ -72,13 +74,59 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Secure CORS Origin list configuration
+raw_origins = settings.cors_origin_list
+frontend_origin = settings.app_frontend_url.rstrip("/") if settings.app_frontend_url else "http://localhost:5173"
+default_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", frontend_origin]
+
+if "*" in raw_origins:
+    allowed_origins = default_origins
+else:
+    allowed_origins = list(set(raw_origins + default_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*",
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "Stripe-Signature"],
 )
+
+# In-memory rate limiting counters (per client IP)
+rate_limit_store = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+MAX_REQUESTS_PER_WINDOW = 200
+
+
+@app.middleware("http")
+async def security_and_rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+
+    # Clean old requests outside window
+    timestamps = [t for t in rate_limit_store[client_ip] if now - t < RATE_LIMIT_WINDOW]
+    rate_limit_store[client_ip] = timestamps
+
+    if len(timestamps) >= MAX_REQUESTS_PER_WINDOW:
+        return Response(
+            content='{"detail": "Rate limit exceeded. Too many requests. Please try again later."}',
+            status_code=429,
+            media_type="application/json"
+        )
+
+    rate_limit_store[client_ip].append(now)
+
+    response: Response = await call_next(request)
+
+    # Security Headers Enforcement
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    return response
+
 
 app.include_router(workspaces.router)
 app.include_router(invitations.router)
@@ -87,7 +135,6 @@ app.include_router(rag.router)
 app.include_router(usage.router)
 app.include_router(users.router)
 app.include_router(payments.router)
-
 
 
 @app.get("/api/health")
