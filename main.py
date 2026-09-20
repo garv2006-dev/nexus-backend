@@ -77,10 +77,16 @@ app = FastAPI(
 # Secure CORS Origin list configuration
 raw_origins = settings.cors_origin_list
 frontend_origin = settings.app_frontend_url.rstrip("/") if settings.app_frontend_url else "http://localhost:5173"
-default_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", frontend_origin]
+default_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "https://nexus-frontend-eight-iota.vercel.app",
+    frontend_origin
+]
 
 if "*" in raw_origins:
-    allowed_origins = default_origins
+    allowed_origins = ["*"]
 else:
     allowed_origins = list(set(raw_origins + default_origins))
 
@@ -88,8 +94,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "Stripe-Signature"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # In-memory rate limiting counters (per client IP)
@@ -100,6 +107,10 @@ MAX_REQUESTS_PER_WINDOW = 200
 
 @app.middleware("http")
 async def security_and_rate_limit_middleware(request: Request, call_next):
+    # Pass preflight OPTIONS requests directly without rate-limiting
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
 
