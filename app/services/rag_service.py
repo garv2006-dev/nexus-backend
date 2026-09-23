@@ -363,16 +363,26 @@ Answer:"""
     # 10. Record Token Usage
     await record_token_usage(workspace_id, input_tokens_est, output_tokens_est)
 
-    # 11. Form Sources Metadata
+    # 11. Form Sources Metadata & Extract Latency Metrics
+    retrieval_time_ms = guarded_chunks[0].get("retrieval_time_ms", 0.0) if guarded_chunks else 0.0
+    search_time_ms = guarded_chunks[0].get("search_time_ms", 0.0) if guarded_chunks else 0.0
+    rerank_time_ms = guarded_chunks[0].get("rerank_time_ms", 0.0) if guarded_chunks else 0.0
+
     sources = []
     for c in guarded_chunks:
         clean_snip = clean_text_formatting(c.get("content", ""))[:180] + "..."
+        orig_s = round(float(c.get("original_score", c.get("final_score", 0))), 3)
+        rr_s = round(float(c.get("rerank_score", c.get("final_score", 0))), 3)
+        final_s = round(float(c.get("final_score", 0)), 3)
         sources.append({
             "document_id": str(c.get("document_id", "")),
             "document_name": c.get("document_name", "Document"),
             "page_number": c.get("page_number", 1),
             "content_snippet": clean_snip,
-            "score": round(float(c.get("final_score", 0)), 3)
+            "score": final_s,
+            "rerank_score": rr_s,
+            "original_score": orig_s,
+            "retrieval_time_ms": retrieval_time_ms
         })
 
     # 12. Save Messages to Database
@@ -401,7 +411,13 @@ Answer:"""
         "role": "assistant",
         "content": sanitized_answer,
         "sources": sources,
-        "tokens_used": total_tokens
+        "tokens_used": total_tokens,
+        "retrieval_metrics": {
+            "retrieval_time_ms": retrieval_time_ms,
+            "search_time_ms": search_time_ms,
+            "rerank_time_ms": rerank_time_ms,
+            "chunks_retrieved": len(guarded_chunks)
+        }
     }
 
     # Save to response cache

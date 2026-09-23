@@ -102,13 +102,24 @@ def extract_text_from_file(file_bytes: bytes, file_name: str) -> List[Dict[str, 
 
 def chunk_extracted_pages(
     pages: List[Dict[str, Any]],
-    target_chunk_chars: int = 1800,  # ~400-450 tokens (optimized for precision & token cost)
-    overlap_chars: int = 300         # ~75 tokens overlap
+    target_chunk_chars: int = 1000,  # ~200-250 tokens (LangChain optimal baseline for vector + rerank precision)
+    overlap_chars: int = 200         # ~40-50 tokens overlap to maintain semantic continuity
 ) -> List[Dict[str, Any]]:
     """
-    Paragraph-aware semantic text chunker.
-    Splits text across natural paragraph breaks (\n\n) while respecting page boundaries.
+    Official LangChain RecursiveCharacterTextSplitter chunking engine.
+    Splits text across natural paragraph breaks (\n\n), line breaks (\n), and sentence boundaries while respecting page boundaries.
     """
+    try:
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=target_chunk_chars,
+            chunk_overlap=overlap_chars,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+        use_langchain = True
+    except ImportError:
+        use_langchain = False
+
     chunks = []
     chunk_idx = 0
 
@@ -116,62 +127,55 @@ def chunk_extracted_pages(
         page_num = page_info["page_number"]
         page_text = page_info["text"]
 
-        if not page_text.strip():
+        if not page_text or not page_text.strip():
             continue
 
-        # Split into paragraphs
-        paragraphs = [p.strip() for p in re.split(r'\n\s*\n', page_text) if p.strip()]
-
-        current_chunk = ""
-
-        for para in paragraphs:
-            if len(current_chunk) + len(para) + 2 <= target_chunk_chars:
-                current_chunk += ("\n\n" if current_chunk else "") + para
-            else:
-                if current_chunk:
+        if use_langchain:
+            lc_docs = splitter.create_documents(
+                texts=[page_text],
+                metadatas=[{"page_number": page_num}]
+            )
+            for doc in lc_docs:
+                clean_content = doc.page_content.strip()
+                if clean_content:
                     chunks.append({
                         "chunk_index": chunk_idx,
                         "page_number": page_num,
-                        "content": current_chunk.strip()
+                        "content": clean_content
                     })
                     chunk_idx += 1
-                    # Keep overlap from end of current_chunk
-                    overlap_start = max(0, len(current_chunk) - overlap_chars)
-                    current_chunk = current_chunk[overlap_start:].strip() + "\n\n" + para
+        else:
+            # Fallback paragraph splitter
+            paragraphs = [p.strip() for p in re.split(r'\n\s*\n', page_text) if p.strip()]
+            current_chunk = ""
+            for para in paragraphs:
+                if len(current_chunk) + len(para) + 2 <= target_chunk_chars:
+                    current_chunk += ("\n\n" if current_chunk else "") + para
                 else:
-                    # Paragraph is longer than target_chunk_chars -> force break by sentences
-                    sentences = re.split(r'(?<=[.!?])\s+', para)
-                    sub_chunk = ""
-                    for s in sentences:
-                        if len(sub_chunk) + len(s) + 1 <= target_chunk_chars:
-                            sub_chunk += (" " if sub_chunk else "") + s
-                        else:
-                            if sub_chunk:
-                                chunks.append({
-                                    "chunk_index": chunk_idx,
-                                    "page_number": page_num,
-                                    "content": sub_chunk.strip()
-                                })
-                                chunk_idx += 1
-                                sub_chunk = s
-                            else:
-                                # Giant string with no whitespace
-                                chunks.append({
-                                    "chunk_index": chunk_idx,
-                                    "page_number": page_num,
-                                    "content": s[:target_chunk_chars]
-                                })
-                                chunk_idx += 1
-                                sub_chunk = ""
-                    if sub_chunk:
-                        current_chunk = sub_chunk
-
-        if current_chunk.strip():
-            chunks.append({
-                "chunk_index": chunk_idx,
-                "page_number": page_num,
-                "content": current_chunk.strip()
-            })
-            chunk_idx += 1
+                    if current_chunk:
+                        chunks.append({
+                            "chunk_index": chunk_idx,
+                            "page_number": page_num,
+                            "content": current_chunk.strip()
+                        })
+                        chunk_idx += 1
+                        overlap_start = max(0, len(current_chunk) - overlap_chars)
+                        current_chunk = current_chunk[overlap_start:].strip() + "\n\n" + para
+                    else:
+                        chunks.append({
+                            "chunk_index": chunk_idx,
+                            "page_number": page_num,
+                            "content": para[:target_chunk_chars]
+                        })
+                        chunk_idx += 1
+                        current_chunk = ""
+            if current_chunk.strip():
+                chunks.append({
+                    "chunk_index": chunk_idx,
+                    "page_number": page_num,
+                    "content": current_chunk.strip()
+                })
+                chunk_idx += 1
 
     return chunks
+
