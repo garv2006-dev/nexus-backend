@@ -86,14 +86,52 @@ async def create_workspace(user_id: str, name: str) -> Dict[str, Any]:
             return res
 
 
+async def _sync_workspace_paid_plan(workspace_id_str: str):
+    """Auto-heals workspace record if a succeeded payment exists for a higher/newer plan."""
+    try:
+        latest_succeeded = await fetch_one(
+            "SELECT plan_id FROM payments WHERE workspace_id = $1 AND payment_status = 'succeeded' ORDER BY completed_at DESC, created_at DESC LIMIT 1",
+            workspace_id_str
+        )
+        if latest_succeeded and latest_succeeded.get("plan_id"):
+            paid_plan = latest_succeeded["plan_id"]
+            if paid_plan in PLAN_SPECS:
+                spec = PLAN_SPECS[paid_plan]
+                await execute(
+                    """
+                    UPDATE workspaces
+                    SET plan_type = $1,
+                        daily_token_limit = $2,
+                        max_pages = $3,
+                        max_members = $4,
+                        subscription_status = 'active'
+                    WHERE id = $5 AND plan_type != $1
+                    """,
+                    paid_plan, spec["daily_token_limit"], spec["max_pages"], spec["max_members"], uuid.UUID(workspace_id_str)
+                )
+    except Exception as e:
+        print(f"Plan sync warning for workspace {workspace_id_str}: {e}")
+
+
 async def list_user_workspaces(user_id: str) -> List[Dict[str, Any]]:
     """Lists all workspaces accessible to the user along with plan details, member & document/page counts."""
+    # First sync plan for user's workspaces
+    ws_ids = await fetch_all(
+        "SELECT workspace_id FROM workspace_members WHERE user_id = $1", user_id
+    )
+    for r in ws_ids:
+        await _sync_workspace_paid_plan(str(r["workspace_id"]))
+
     query = f"""
         SELECT 
             w.id,
             w.name,
             w.owner_id,
             COALESCE(w.plan_type, 'starter') as plan_type,
+            w.stripe_customer_id,
+            w.stripe_subscription_id,
+            COALESCE(w.subscription_status, 'active') as subscription_status,
+            w.current_period_end,
             w.max_members,
             w.daily_token_limit,
             COALESCE(w.max_pages, 25) as max_pages,
@@ -122,12 +160,17 @@ async def list_user_workspaces(user_id: str) -> List[Dict[str, Any]]:
 async def get_workspace_details(workspace_id: str, user_id: str) -> Dict[str, Any]:
     """Gets details for a specific workspace after verifying membership."""
     await verify_workspace_member(user_id, workspace_id)
+    await _sync_workspace_paid_plan(str(workspace_id))
     query = f"""
         SELECT 
             w.id,
             w.name,
             w.owner_id,
             COALESCE(w.plan_type, 'starter') as plan_type,
+            w.stripe_customer_id,
+            w.stripe_subscription_id,
+            COALESCE(w.subscription_status, 'active') as subscription_status,
+            w.current_period_end,
             w.max_members,
             w.daily_token_limit,
             COALESCE(w.max_pages, 25) as max_pages,

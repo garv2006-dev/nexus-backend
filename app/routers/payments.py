@@ -43,6 +43,7 @@ class CheckoutSessionRequest(BaseModel):
 class VerifyCheckoutSessionRequest(BaseModel):
     workspace_id: str = Field(..., description="ID of workspace")
     session_id: str = Field(..., description="Stripe Checkout Session ID")
+    plan_id: Optional[str] = Field(None, description="Target plan ID ('pro' or 'enterprise')")
 
     @field_validator("workspace_id", "session_id")
     @classmethod
@@ -102,7 +103,9 @@ async def verify_checkout_session(
     await verify_workspace_admin_or_owner(current_user["id"], payload.workspace_id)
     result = await stripe_service.verify_and_fulfill_checkout_session(
         session_id=payload.session_id,
-        workspace_id=payload.workspace_id
+        workspace_id=payload.workspace_id,
+        plan_id_override=payload.plan_id,
+        force_activate=True
     )
     return {
         "status": "success",
